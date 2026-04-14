@@ -83,6 +83,8 @@ export SIMPLE_HERMES_PROJECT_ROOT=/path/to/project
 export SIMPLE_HERMES_MAX_STEPS=300
 ```
 
+默认项目根是启动命令时所在的当前目录；如果当前目录位于一个包含 `pyproject.toml` 和 `simple_hermes/` 的源码 checkout 内，会自动提升到该 checkout 根目录。要让 agent 操作别的项目，最稳妥的方式是在目标项目目录里启动，或显式设置 `SIMPLE_HERMES_PROJECT_ROOT`。
+
 ## Planner 模式
 
 规则 fallback 模式：

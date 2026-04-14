@@ -6,7 +6,7 @@ from pathlib import Path
 from simple_hermes.agent import AgentTraceStep, PlannerDecision, SimpleAgent, ToolCall
 from simple_hermes.backend import OpenAICompatibleBackend, _detect_hermes_repo_root
 from simple_hermes.cli import _default_session_id, _detect_max_steps, _detect_project_root, _detect_session_id
-from simple_hermes.agent.prompting import PromptContext, build_planner_prompt
+from simple_hermes.agent.prompting import PLANNER_SYSTEM_MESSAGE, PromptContext, build_planner_prompt
 
 
 class FakeBackend:
@@ -71,8 +71,15 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("read_lines", prompt)
         self.assertIn("project_overview", prompt)
         self.assertIn("diff", prompt)
-        self.assertIn("short follow-up", prompt)
+        self.assertIn("active task state", prompt)
+        self.assertIn("status-only text", prompt)
         self.assertIn("do not ask for clarification", prompt)
+        self.assertIn("autonomous coding assistant", prompt)
+
+    def test_planner_system_message_pushes_autonomous_tool_use(self) -> None:
+        self.assertIn("autonomous planning layer", PLANNER_SYSTEM_MESSAGE)
+        self.assertIn("safe tool use", PLANNER_SYSTEM_MESSAGE)
+        self.assertIn("strict JSON", PLANNER_SYSTEM_MESSAGE)
 
 
 class AgentPlanningTests(unittest.TestCase):
@@ -260,13 +267,21 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("backend adapters", result.final_response)
         self.assertLessEqual(result.steps, 1)
 
-    def test_cli_detects_repo_root_when_cwd_is_outside_repo(self) -> None:
+    def test_cli_detects_repo_root_when_cwd_is_inside_repo(self) -> None:
+        inside = self.project_root / "subdir" / "nested"
+        inside.mkdir(parents=True, exist_ok=True)
+        (self.project_root / "pyproject.toml").write_text("[project]\nname = 'tmp'\n", encoding="utf-8")
+        (self.project_root / "simple_hermes").mkdir(exist_ok=True)
+        detected = _detect_project_root(cwd=inside, module_file=self.project_root / "simple_hermes" / "cli.py")
+        self.assertEqual(detected, self.project_root.resolve())
+
+    def test_cli_uses_cwd_when_cwd_is_outside_source_repo(self) -> None:
         outside = Path(self.temp_dir.name) / "outside"
         outside.mkdir(parents=True, exist_ok=True)
         (self.project_root / "pyproject.toml").write_text("[project]\nname = 'tmp'\n", encoding="utf-8")
         (self.project_root / "simple_hermes").mkdir(exist_ok=True)
         detected = _detect_project_root(cwd=outside, module_file=self.project_root / "simple_hermes" / "cli.py")
-        self.assertEqual(detected, self.project_root.resolve())
+        self.assertEqual(detected, outside.resolve())
 
     def test_cli_uses_project_scoped_session_id_with_env_override(self) -> None:
         default_id = _default_session_id(self.project_root)

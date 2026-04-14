@@ -193,15 +193,11 @@ def _detect_project_root(cwd: Path | None = None, module_file: Path | None = Non
     if explicit:
         return Path(explicit).expanduser().resolve()
 
-    search_starts = [
-        (cwd or Path.cwd()).resolve(),
-        (module_file or Path(__file__)).resolve().parent,
-    ]
-    for start in search_starts:
-        found = _find_project_root(start)
-        if found is not None:
-            return found.resolve()
-    return search_starts[0]
+    cwd_root = (cwd or Path.cwd()).resolve()
+    found = _find_project_root(cwd_root)
+    if found is not None:
+        return found.resolve()
+    return cwd_root
 
 
 def _default_session_id(project_root: Path) -> str:

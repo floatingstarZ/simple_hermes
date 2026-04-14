@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from urllib import request
 
-from simple_hermes.agent.prompting import PromptContext, build_planner_prompt
+from simple_hermes.agent.prompting import PLANNER_SYSTEM_MESSAGE, PromptContext, build_planner_prompt
 
 
 @dataclass
@@ -80,7 +80,7 @@ class OpenAICompatibleBackend(LLMBackend):
         body = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a tiny planning model for an educational agent. Return strict JSON only."},
+                {"role": "system", "content": PLANNER_SYSTEM_MESSAGE},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0,
@@ -103,7 +103,7 @@ class OpenAICompatibleBackend(LLMBackend):
         body = {
             "model": self.model,
             "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": "You are a tiny planning model for an educational agent. Return strict JSON only."}]},
+                {"role": "system", "content": [{"type": "input_text", "text": PLANNER_SYSTEM_MESSAGE}]},
                 {"role": "user", "content": [{"type": "input_text", "text": prompt}]},
             ],
         }
@@ -159,7 +159,7 @@ class HermesRuntimeBackend(LLMBackend):
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": "You are a tiny planning model for an educational agent. Return strict JSON only."},
+                {"role": "system", "content": PLANNER_SYSTEM_MESSAGE},
                 {"role": "user", "content": prompt},
             ],
             temperature=0,
