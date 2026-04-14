@@ -24,6 +24,17 @@ from simple_hermes.tools.builtin import BuiltInTools
 
 INSPECTION_TOOLS = {"read", "read_lines", "tree", "glob", "project_overview", "search"}
 ACTIVE_TASK_STATE_KEY = "active_task"
+PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "MEMORY.md")
+PROJECT_CONTEXT_FILE_CHAR_LIMIT = 3500
+PROJECT_CONTEXT_TOTAL_CHAR_LIMIT = 10000
+PROJECT_SKILL_SUMMARY_LIMIT = 40
+PROJECT_SKILL_READ_CHAR_LIMIT = 2500
+SECRET_REDACTION_PATTERNS = (
+    r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
+    r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+",
+    r"sk-[A-Za-z0-9_-]{8,}",
+    r"gh[pousr]_[A-Za-z0-9_]{8,}",
+)
 
 
 @dataclass
@@ -322,6 +333,123 @@ class SimpleAgent:
             lines.append(f"{prefix} {content}")
         return "\n".join(lines)
 
+    def _redact_project_context(self, text: str) -> str:
+        """清理项目级上下文里的常见密钥形态，避免 planner prompt 泄露凭证。"""
+        redacted = text
+        for pattern in SECRET_REDACTION_PATTERNS:
+            redacted = re.sub(
+                pattern,
+                lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]" if len(m.groups()) >= 2 else "[REDACTED]",
+                redacted,
+            )
+        return redacted
+
+    def _bounded_project_file_excerpt(self, path: Path, limit: int = PROJECT_CONTEXT_FILE_CHAR_LIMIT) -> str | None:
+        """读取项目指令文件的有界片段；失败时跳过而不是阻断规划。"""
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        text = self._redact_project_context(text.strip())
+        if len(text) > limit:
+            text = text[:limit] + "\n...[truncated; inspect the full file with read when relevant]"
+        return text
+
+    def _project_instruction_excerpts(self) -> list[tuple[str, str]]:
+        """收集常见项目级 agent 指令文件的短摘录。"""
+        excerpts: list[tuple[str, str]] = []
+        for filename in PROJECT_INSTRUCTION_FILES:
+            path = self.project_root / filename
+            if not path.is_file():
+                continue
+            excerpt = self._bounded_project_file_excerpt(path)
+            if excerpt:
+                excerpts.append((filename, excerpt))
+        return excerpts
+
+    def _parse_project_skill_summary(self, skill_path: Path) -> tuple[str, str]:
+        """从本地 skill 的 SKILL.md 抽取名称和描述。
+
+        这里只读元信息，不展开脚本内容；真正使用技能前仍应 read 对应 SKILL.md。
+        """
+        name = skill_path.parent.name
+        description = ""
+        try:
+            text = skill_path.read_text(encoding="utf-8", errors="replace")[:PROJECT_SKILL_READ_CHAR_LIMIT]
+        except OSError:
+            return name, description
+        text = self._redact_project_context(text)
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end != -1:
+                for line in text[3:end].splitlines():
+                    key, sep, value = line.partition(":")
+                    if not sep:
+                        continue
+                    cleaned_key = key.strip().lower()
+                    cleaned_value = value.strip().strip("\"'")
+                    if cleaned_key == "name" and cleaned_value:
+                        name = cleaned_value
+                    elif cleaned_key == "description" and cleaned_value:
+                        description = cleaned_value
+        if not description:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    description = stripped.lstrip("#").strip()
+                    break
+        return name, description
+
+    def _project_skill_summaries(self) -> list[str]:
+        """列出项目内 skills/*/SKILL.md，帮助 planner 知道应该先读哪个技能。"""
+        skills_root = self.project_root / "skills"
+        if not skills_root.is_dir():
+            return []
+        lines: list[str] = []
+        for skill_path in sorted(skills_root.glob("*/SKILL.md"))[:PROJECT_SKILL_SUMMARY_LIMIT]:
+            try:
+                rel = str(skill_path.relative_to(self.project_root))
+            except ValueError:
+                rel = str(skill_path)
+            name, description = self._parse_project_skill_summary(skill_path)
+            suffix = f": {description}" if description else ""
+            lines.append(f"- {name} ({rel}){suffix}")
+        return lines
+
+    def _project_context_text(self) -> str:
+        """为 planner 构造通用项目上下文，不把任何具体项目偏好写死到代码里。"""
+        instruction_excerpts = self._project_instruction_excerpts()
+        skill_summaries = self._project_skill_summaries()
+        if not instruction_excerpts and not skill_summaries:
+            return ""
+
+        lines = [
+            "Project-level context:",
+            "- Treat repository files as the source of truth; do not hardcode project-specific preferences in Simple Hermes.",
+            "- Follow instruction files such as AGENTS.md, CLAUDE.md, and MEMORY.md when they are present.",
+            "- When project-local skills are listed under skills/, read the relevant SKILL.md before running its scripts or terminal commands.",
+        ]
+        if instruction_excerpts:
+            lines.append("Instruction file excerpts:")
+            for rel, excerpt in instruction_excerpts:
+                lines.append(f"## {rel}")
+                lines.append(excerpt)
+        if skill_summaries:
+            lines.append("Project-local skills:")
+            lines.extend(skill_summaries)
+        text = "\n".join(lines)
+        if len(text) > PROJECT_CONTEXT_TOTAL_CHAR_LIMIT:
+            text = text[:PROJECT_CONTEXT_TOTAL_CHAR_LIMIT] + "\n...[project context truncated]"
+        return text
+
+    def _backend_memory_block(self) -> str:
+        """合并长期记忆和项目级指令摘要，供后端 planner 使用。"""
+        blocks = [self.memory.as_prompt_block().strip()]
+        project_context = self._project_context_text().strip()
+        if project_context:
+            blocks.append(project_context)
+        return "\n\n".join(block for block in blocks if block)
+
     def plan(self, message: str, allow_explicit_tools: bool = True) -> PlannerDecision:
         """从显式命令或后端 planner 获得一个规划决策。"""
         if allow_explicit_tools:
@@ -335,7 +463,7 @@ class SimpleAgent:
         if self.backend is not None:
             return self.backend.plan(
                 message=message,
-                memory_block=self.memory.as_prompt_block(),
+                memory_block=self._backend_memory_block(),
                 history_text=self._backend_history_text(limit=12),
                 tools_text=self.tools.help_text(),
             )

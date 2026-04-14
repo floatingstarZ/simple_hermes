@@ -187,6 +187,26 @@ class ToolTests(unittest.TestCase):
         self.assertIn("Package scripts:", text)
         self.assertIn("- test: node --test", text)
 
+    def test_project_overview_reports_instruction_files_and_local_skills(self) -> None:
+        (self.project_root / "AGENTS.md").write_text("Follow project workflow.", encoding="utf-8")
+        skill_dir = self.project_root / "skills" / "rss-reader"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: rss-reader\n"
+            "description: Fetch RSS feeds for tracking.\n"
+            "---\n"
+            "# RSS Reader\n",
+            encoding="utf-8",
+        )
+
+        text = self.tools.project_overview("")
+
+        self.assertIn("Project instruction files:", text)
+        self.assertIn("- AGENTS.md", text)
+        self.assertIn("Project-local skills:", text)
+        self.assertIn("- rss-reader (skills/rss-reader/SKILL.md): Fetch RSS feeds for tracking.", text)
+
     def test_diff_shows_git_diff_when_project_is_git_repo(self) -> None:
         subprocess_env = os.environ.copy()
         self.tools._run_subprocess(["git", "init"], timeout=10, label="git", env=subprocess_env)

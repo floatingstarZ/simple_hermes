@@ -736,6 +736,52 @@ class BuiltInTools:
             return f"No files matched glob: {pattern}"
         return "Files:\n" + "\n".join(f"- {item}" for item in sorted(matches))
 
+    def _project_instruction_file_lines(self) -> list[str]:
+        """列出项目内常见 agent 指令文件；这里只报路径，不强行解释具体项目语义。"""
+        names = ("AGENTS.md", "CLAUDE.md", "MEMORY.md")
+        lines = [f"- {name}" for name in names if (self.project_root / name).is_file()]
+        return lines or ["- none"]
+
+    def _project_local_skill_lines(self) -> list[str]:
+        """列出项目内 skills/*/SKILL.md 的简短元信息，方便 planner 下一步 read。"""
+        skills_root = self.project_root / "skills"
+        if not skills_root.is_dir():
+            return ["- none"]
+        lines: list[str] = []
+        for skill_path in sorted(skills_root.glob("*/SKILL.md"))[:40]:
+            try:
+                rel = str(skill_path.relative_to(self.project_root))
+            except ValueError:
+                rel = str(skill_path)
+            name = skill_path.parent.name
+            description = ""
+            try:
+                text = self._redact_secret_text(skill_path.read_text(encoding="utf-8", errors="replace")[:2500])
+            except OSError:
+                text = ""
+            if text.startswith("---"):
+                end = text.find("\n---", 3)
+                if end != -1:
+                    for line in text[3:end].splitlines():
+                        key, sep, value = line.partition(":")
+                        if not sep:
+                            continue
+                        cleaned_key = key.strip().lower()
+                        cleaned_value = value.strip().strip("\"'")
+                        if cleaned_key == "name" and cleaned_value:
+                            name = cleaned_value
+                        elif cleaned_key == "description" and cleaned_value:
+                            description = cleaned_value
+            if not description:
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("#"):
+                        description = stripped.lstrip("#").strip()
+                        break
+            suffix = f": {description}" if description else ""
+            lines.append(f"- {name} ({rel}){suffix}")
+        return lines or ["- none"]
+
     def project_overview(self, _: str) -> str:
         markers = {
             "pyproject.toml": "Python project",
@@ -786,6 +832,10 @@ class BuiltInTools:
             *(f"- {item}" for item in (test_dirs[:10] or ["none"])),
             "Likely verification commands:",
             *(f"- {cmd}" for cmd in (likely_commands or ["inspect project files first"])),
+            "Project instruction files:",
+            *self._project_instruction_file_lines(),
+            "Project-local skills:",
+            *self._project_local_skill_lines(),
         ]
         overview_lines.extend(package_script_lines)
         return "\n".join(overview_lines)

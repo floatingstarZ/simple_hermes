@@ -105,6 +105,9 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("autonomous coding assistant", prompt)
         self.assertIn("requires_edit", prompt)
         self.assertIn("requires_test", prompt)
+        self.assertIn("project-level context", prompt)
+        self.assertIn("relevant SKILL.md", prompt)
+        self.assertIn("Do not hardcode repository-specific tracking preferences", prompt)
 
     def test_planner_system_message_pushes_autonomous_tool_use(self) -> None:
         self.assertIn("autonomous planning layer", PLANNER_SYSTEM_MESSAGE)
@@ -241,6 +244,46 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("Available tools:", call["tools_text"])
         self.assertIn("[user](user_message) history", call["history_text"])
         self.assertNotIn("tool_result", call["history_text"])
+
+    def test_backend_receives_project_instructions_and_skill_summaries_without_secrets(self) -> None:
+        (self.project_root / "AGENTS.md").write_text(
+            "Treat daily track as the full repository workflow.\napi_key = sk-testsecret1234567890\n",
+            encoding="utf-8",
+        )
+        (self.project_root / "MEMORY.md").write_text(
+            "Track date defaults to previous Beijing day. token=ghp_secretvalue1234567890\n",
+            encoding="utf-8",
+        )
+        skill_dir = self.project_root / "skills" / "huggingface-papers"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: huggingface-papers\n"
+            "description: Fetch Hugging Face Daily Papers for a date.\n"
+            "---\n"
+            "# Hugging Face Daily Papers\n",
+            encoding="utf-8",
+        )
+        backend = FakeBackend([PlannerDecision(kind="text", text="ready for daily track", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_project_context",
+            backend=backend,
+        )
+
+        agent.run("开始 daily track")
+
+        memory_block = backend.calls[-1]["memory_block"]
+        self.assertIn("Project-level context:", memory_block)
+        self.assertIn("AGENTS.md", memory_block)
+        self.assertIn("Treat daily track as the full repository workflow", memory_block)
+        self.assertIn("MEMORY.md", memory_block)
+        self.assertIn("Track date defaults to previous Beijing day", memory_block)
+        self.assertIn("huggingface-papers (skills/huggingface-papers/SKILL.md)", memory_block)
+        self.assertIn("Fetch Hugging Face Daily Papers", memory_block)
+        self.assertIn("[REDACTED]", memory_block)
+        self.assertNotIn("sk-testsecret1234567890", memory_block)
+        self.assertNotIn("ghp_secretvalue1234567890", memory_block)
 
     def test_detect_hermes_repo_root_from_env(self) -> None:
         os.environ["SIMPLE_HERMES_HERMES_ROOT"] = "/tmp/hermes-root"
