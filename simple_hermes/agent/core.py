@@ -113,141 +113,6 @@ class SimpleAgent:
             session_id_getter=lambda: self.session_id,
         ).registry
 
-    def _extract_path_from_message(self, message: str) -> Optional[str]:
-        patterns = [
-            r'([~/][^\s"\']+?\.[A-Za-z0-9]+)',
-            r'((?:\./|\.\./)[^\s"\']+?\.[A-Za-z0-9]+)',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, message)
-            if match:
-                return match.group(1)
-        return None
-
-    def _wants_file_explanation(self, message: str) -> bool:
-        lower = message.lower()
-        hints = (
-            "what does",
-            "what is",
-            "explain",
-            "analy",
-            "inspect",
-            "look at",
-            "这个code",
-            "这个文件",
-            "干啥",
-            "做什么",
-            "看看",
-            "解释",
-            "分析",
-        )
-        return any(hint in lower for hint in hints)
-
-    def _should_short_circuit_file_explanation(self, message: str) -> bool:
-        return self._extract_path_from_message(message) is not None and self._wants_file_explanation(message)
-
-    def _wants_project_inspection(self, message: str) -> bool:
-        lower = message.lower()
-        subject_hints = (
-            "project",
-            "codebase",
-            "repository",
-            "repo",
-            "项目",
-            "代码",
-            "工程",
-        )
-        action_hints = (
-            "inspect",
-            "diagnos",
-            "look at",
-            "analy",
-            "understand",
-            "parse",
-            "fix",
-            "implement",
-            "change",
-            "edit",
-            "看",
-            "诊断",
-            "分析",
-            "解析",
-            "理解",
-            "修复",
-            "实现",
-            "修改",
-        )
-        return any(hint in lower for hint in subject_hints) and any(hint in lower for hint in action_hints)
-
-    def _wants_passive_project_diagnosis(self, message: str) -> bool:
-        lower = message.lower()
-        diagnosis_hints = (
-            "diagnos",
-            "current logic",
-            "test expect",
-            "只做诊断",
-            "诊断结论",
-            "当前逻辑",
-            "测试期待",
-            "先看",
-            "先分析",
-        )
-        return self._wants_project_inspection(message) and not self._needs_code_change(message) and any(hint in lower for hint in diagnosis_hints)
-
-    def _diagnosis_query(self, message: str) -> str:
-        for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", message):
-            if "_" in token or token.endswith("items"):
-                return token
-        return "test"
-
-    def _needs_code_change(self, message: str) -> bool:
-        lower = message.lower()
-        negative_hints = (
-            "不要改代码",
-            "先不要改",
-            "不要修改",
-            "不要编辑",
-            "不要动代码",
-            "只做诊断",
-            "只分析",
-            "只看",
-            "do not edit",
-            "don't edit",
-            "do not change",
-            "no code changes",
-            "without changing",
-        )
-        if any(hint in lower for hint in negative_hints):
-            return False
-        hints = (
-            "add",
-            "build",
-            "create",
-            "fix",
-            "implement",
-            "modify",
-            "change",
-            "edit",
-            "patch",
-            "write code",
-            "write file",
-            "新增",
-            "添加",
-            "创建",
-            "生成",
-            "修复",
-            "做个",
-            "写个",
-            "写一个",
-            "写个小程序",
-            "开发",
-            "改代码",
-            "修改",
-            "实现",
-            "实际改",
-        )
-        return any(hint in lower for hint in hints)
-
     def _load_active_task(self) -> dict | None:
         raw = self.sessions.get_state(self.session_id, ACTIVE_TASK_STATE_KEY)
         if not raw:
@@ -283,32 +148,21 @@ class SimpleAgent:
         task["status"] = status
         self._save_active_task(task)
 
-    def _is_obviously_separate_message(self, message: str) -> bool:
+    def _is_explicit_separate_message(self, message: str) -> bool:
         stripped = message.strip()
-        lower = stripped.lower()
         if not stripped:
             return True
         if self._plan_tool(stripped)[0] is not None:
             return True
-        if lower in {"hi", "hello", "hey", "你好", "嗨", "thanks", "thank you", "谢谢", "多谢"}:
-            return True
-        if self._needs_code_change(stripped):
-            return True
-        if re.search(r"\b[\w./-]+\.(?:py|js|ts|tsx|jsx|md|json|toml|txt|html|css|yaml|yml)\b", stripped) and self._wants_file_explanation(stripped):
-            return True
         return False
 
     def _resolve_task_frame(self, message: str) -> tuple[str, dict | None, str | None]:
-        if self._needs_code_change(message):
-            task = self._start_active_task(message)
-            return message, task, "new_task"
-
         task = self._load_active_task()
         if task is None or task.get("category") != "coding":
             return message, task, None
         if task.get("status") not in {"in_progress", "awaiting_user"}:
             return message, task, None
-        if self._is_obviously_separate_message(message):
+        if self._is_explicit_separate_message(message):
             return message, task, None
 
         task["last_user_message"] = message.strip()
@@ -322,62 +176,6 @@ class SimpleAgent:
             "Do not ask for more confirmation unless the task is truly impossible; inspect the project if needed, then create or edit the appropriate project file."
         )
         return expanded, task, "continued_task"
-
-    def _needs_test(self, message: str) -> bool:
-        lower = message.lower()
-        hints = ("test", "verify", "验证", "测试")
-        return any(hint in lower for hint in hints)
-
-    def _rule_based_file_explanation(self, request: str, read_result: str) -> str:
-        if not read_result.startswith("# "):
-            return read_result
-        parts = read_result.split("\n\n", 1)
-        if len(parts) != 2:
-            return read_result
-        header, content = parts
-        display_path = header[2:].strip()
-        if not display_path.endswith(".py"):
-            return f"I read {display_path}.\n\n{read_result}"
-
-        classes = re.findall(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)", content, re.MULTILINE)
-        functions = re.findall(r"^(?:async\s+def|def)\s+([A-Za-z_][A-Za-z0-9_]*)", content, re.MULTILINE)
-        imports = re.findall(r"^(?:from\s+([^\s]+)\s+import|import\s+([^\s]+))", content, re.MULTILINE)
-        import_names = [left or right for left, right in imports]
-
-        summary_bits = [f"I read {display_path}."]
-        if self._wants_file_explanation(request):
-            summary_bits.append("It looks like a Python module for this part of the project.")
-        if import_names:
-            summary_bits.append("Imports: " + ", ".join(import_names[:6]) + ("." if len(import_names) <= 6 else ", ..."))
-        if classes:
-            summary_bits.append("Classes: " + ", ".join(classes[:6]) + ("." if len(classes) <= 6 else ", ..."))
-        if functions:
-            summary_bits.append("Functions: " + ", ".join(functions[:8]) + ("." if len(functions) <= 8 else ", ..."))
-        if "class OpenAICompatibleBackend" in content:
-            summary_bits.append("This file mainly implements backend adapters: an OpenAI-compatible planner client, a Hermes runtime bridge, and environment-based backend selection.")
-        if not classes and not functions:
-            summary_bits.append("It mostly contains top-level code, constants, or configuration.")
-        return " ".join(summary_bits) + "\n\n" + read_result
-
-    def _explain_file_after_read(self, request: str, read_result: str) -> str:
-        base_explanation = self._rule_based_file_explanation(request, read_result)
-        if self.backend is None:
-            return base_explanation
-        try:
-            decision = self.backend.plan(
-                message=(
-                    "Explain the code file that was just read. Answer the user's request directly in plain language. "
-                    f"Original request: {request}"
-                ),
-                memory_block=self.memory.as_prompt_block(),
-                history_text=read_result,
-                tools_text="No tool call allowed. Return text only.",
-            )
-            if decision.text and decision.kind == "text":
-                return decision.text + "\n\n" + read_result
-        except Exception:
-            pass
-        return base_explanation
 
     def _format_run_state(self, observations: List[str]) -> str:
         if not observations:
@@ -395,7 +193,7 @@ class SimpleAgent:
 
     def _tool_followup_message(self, original_message: str, tool_name: str, result: str, observations: List[str]) -> str:
         failure_hint = ""
-        if tool_name in {"run_tests", "terminal"} and "exit code: 0" not in result and self._needs_test(original_message):
+        if tool_name in {"run_tests", "terminal"} and "exit code: 0" not in result:
             failure_hint = (
                 "\nThe last verification command failed. Use the failure output to identify the remaining implementation gap, "
                 "patch the relevant source file, and rerun tests before giving a final answer."
@@ -445,9 +243,6 @@ class SimpleAgent:
                 if tool_name in {"write_file", "patch_file"}:
                     return tool_name, arg
                 return tool_name, arg.strip()
-        inferred_path = self._extract_path_from_message(message)
-        if inferred_path:
-            return "read", inferred_path
         return None, message
 
     def _fallback_text(self) -> str:
@@ -488,17 +283,6 @@ class SimpleAgent:
                     text=f"Use tool {tool_name}",
                     tool_call=ToolCall(name=tool_name, argument=arg),
                 )
-            if self._wants_project_inspection(message):
-                return PlannerDecision(
-                    kind="tool_call",
-                    text="Inspect project before answering.",
-                    tool_call=ToolCall(name="project_overview", argument=""),
-                )
-
-        greeting = message.strip().lower()
-        if greeting in {"hi", "hello", "hey", "你好", "嗨"}:
-            return PlannerDecision(kind="text", text="Hi! How can I help?", tool_call=None)
-
         if self.backend is not None:
             return self.backend.plan(
                 message=message,
@@ -936,69 +720,6 @@ class SimpleAgent:
     def _record_assistant_text(self, text: str) -> None:
         self.sessions.append("assistant", text, session_id=self.session_id, kind="assistant_text")
 
-    def _run_passive_project_diagnosis(self, message: str, on_step: Callable[[AgentTraceStep], None] | None = None) -> AgentResponse:
-        trace: List[AgentTraceStep] = []
-        observations: List[str] = []
-
-        def emit(item: AgentTraceStep) -> None:
-            trace.append(item)
-            if on_step is not None:
-                on_step(item)
-
-        def run_tool(step: int, name: str, argument: str, reason: str) -> str:
-            emit(AgentTraceStep(step=step, kind="tool_call", content=f"{reason} | argument={argument}", tool_name=name))
-            result = self.tools.run(name, argument)
-            self._record_tool_result(name, result)
-            emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=name))
-            observations.append(self._compact_observation(name, argument, result))
-            return result
-
-        step = 1
-        overview = run_tool(step, "project_overview", "", "Inspect project before passive diagnosis.")
-        step += 1
-        query = self._diagnosis_query(message)
-        search_result = run_tool(step, "search", query, "Locate files related to the requested symbol or behavior.")
-        step += 1
-
-        candidates: list[str] = []
-        for line in search_result.splitlines():
-            line = line.strip()
-            if not line.startswith("- "):
-                continue
-            candidate = line[2:].strip()
-            if candidate.endswith((".py", ".js", ".ts")) and candidate not in candidates:
-                candidates.append(candidate)
-            if len(candidates) >= 4:
-                break
-
-        read_results: list[str] = []
-        for candidate in candidates:
-            read_results.append(run_tool(step, "read", candidate, "Read matched implementation or test file for diagnosis."))
-            step += 1
-
-        joined_reads = "\n\n".join(read_results)
-        findings: list[str] = []
-        if "return list(self.items)" in joined_reads and query:
-            findings.append(f"`{query}` 当前实现直接返回 `list(self.items)`，因此会包含已完成项。")
-        if "completed: bool" in joined_reads and query:
-            findings.append(f"数据模型里完成状态字段是 `completed`，修复时应基于 `not item.completed` 过滤。")
-        if "assertEqual" in joined_reads and query in joined_reads:
-            findings.append("测试里对该逻辑有明确期待：结果应只包含仍处于 active 状态的条目。")
-        if not findings:
-            findings.append("已完成项目定位；请看上面的匹配文件和片段来决定下一步是否修改。")
-
-        files_text = ", ".join(candidates) if candidates else "未找到明确匹配文件"
-        text = (
-            "诊断结论：\n"
-            f"- 相关文件：{files_text}\n"
-            + "\n".join(f"- {finding}" for finding in findings)
-            + "\n- 我没有修改任何文件。后续如果你说“修复/修改”，我会基于这些文件继续处理。"
-        )
-        emit(AgentTraceStep(step=step, kind="text", content=text))
-        self._record_assistant_text(text)
-        self._maybe_compress_history()
-        return AgentResponse(final_response=text, tool_used="read" if read_results else "search", steps=step, trace=trace)
-
     def run(self, message: str, on_step: Callable[[AgentTraceStep], None] | None = None) -> AgentResponse:
         trace: List[AgentTraceStep] = []
 
@@ -1007,15 +728,10 @@ class SimpleAgent:
             if on_step is not None:
                 on_step(item)
 
-        original_message, active_task, task_event = self._resolve_task_frame(message)
+        original_message, active_task, _ = self._resolve_task_frame(message)
         self.sessions.append("user", message, session_id=self.session_id, kind="user_message")
         if original_message != message:
             emit(AgentTraceStep(step=0, kind="task_frame_resolved", content=original_message))
-        elif task_event == "new_task" and active_task is not None:
-            emit(AgentTraceStep(step=0, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
-
-        if self.backend is not None and self._wants_passive_project_diagnosis(original_message):
-            return self._run_passive_project_diagnosis(original_message, on_step=on_step)
 
         if self.backend is None:
             decision = self.plan(original_message)
@@ -1031,11 +747,6 @@ class SimpleAgent:
                     return AgentResponse(final_response=error_text, tool_used=decision.tool_call.name, steps=1, trace=trace)
                 self._record_tool_result(decision.tool_call.name, result)
                 emit(AgentTraceStep(step=1, kind="tool_result", content=result, tool_name=decision.tool_call.name))
-                if decision.tool_call.name == "read" and self._should_short_circuit_file_explanation(original_message):
-                    result = self._rule_based_file_explanation(original_message, result)
-                    self._record_assistant_text(result)
-                    self._maybe_compress_history()
-                    return AgentResponse(final_response=result, tool_used=decision.tool_call.name, steps=1, trace=trace)
                 self._maybe_compress_history()
                 return AgentResponse(final_response=result, tool_used=decision.tool_call.name, steps=1, trace=trace)
 
@@ -1050,6 +761,12 @@ class SimpleAgent:
         completed_inspections: dict[tuple[str, str], str] = {}
         run_observations: List[str] = []
         blocked_repeats = 0
+        requires_edit = bool(
+            active_task is not None
+            and active_task.get("category") == "coding"
+            and active_task.get("status") in {"in_progress", "awaiting_user"}
+        )
+        requires_test = False
         successful_edit = False
         inspected_diff = False
         successful_test = False
@@ -1068,15 +785,20 @@ class SimpleAgent:
                 emit(AgentTraceStep(step=step, kind="backend_error", content=error_text))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+            requires_edit = requires_edit or decision.requires_edit
+            requires_test = requires_test or decision.requires_test
+            if requires_edit and active_task is None:
+                active_task = self._start_active_task(message)
+                emit(AgentTraceStep(step=step, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
             emit(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
             if decision.tool_call is None:
-                if self._needs_code_change(original_message) and not successful_edit:
+                if requires_edit and not successful_edit:
                     self._set_active_task_status("in_progress")
                     recovery_message = self._premature_text_message(original_message, decision.text, run_observations)
                     emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
-                if self._needs_code_change(original_message) and successful_edit and not inspected_diff:
+                if requires_edit and successful_edit and not inspected_diff:
                     emit(AgentTraceStep(step=step, kind="tool_call", content="Auto-inspect diff before final text.", tool_name="diff"))
                     result = self.tools.run("diff", "")
                     last_tool_used = "diff"
@@ -1085,7 +807,7 @@ class SimpleAgent:
                     emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name="diff"))
                     run_observations.append(self._compact_observation("diff", "", result))
                     inspected_diff = self._tool_result_is_diff("diff", result)
-                if self._needs_test(original_message) and not successful_test:
+                if requires_test and not successful_test:
                     recovery_message = self._premature_test_message(original_message, decision.text, run_observations)
                     emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
@@ -1163,12 +885,6 @@ class SimpleAgent:
                 successful_test = True
             if self._tool_result_is_diff(decision.tool_call.name, result):
                 inspected_diff = True
-            if decision.tool_call.name == "read" and self._should_short_circuit_file_explanation(original_message):
-                explained = self._explain_file_after_read(original_message, result)
-                self._record_assistant_text(explained)
-                emit(AgentTraceStep(step=step, kind="text", content=explained, tool_name=decision.tool_call.name))
-                self._maybe_compress_history()
-                return AgentResponse(final_response=explained, tool_used=decision.tool_call.name, steps=step, trace=trace)
             current_message = self._tool_followup_message(original_message, decision.tool_call.name, result, run_observations)
 
         timeout_text = (

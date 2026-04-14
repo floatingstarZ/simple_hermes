@@ -27,6 +27,8 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "tool": "tool name if kind=tool_call",
             "argument": "tool argument string if needed",
             "text": "short assistant text or explanation",
+            "requires_edit": "boolean; true when the user request requires creating, editing, or otherwise changing project files before final text",
+            "requires_test": "boolean; true when the user request requires tests, verification, or when you should not claim completion without running a relevant check",
         },
         "agent_identity": [
             "You are operating inside a local project workspace with persistent session history, active task state, memory, and tools.",
@@ -37,6 +39,8 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "Prefer a tool call whenever it improves grounding, progress, or verification.",
             "Do not answer from memory about live project state, file contents, git state, tests, or command output; inspect with tools.",
             "When the user asks for a code change, file creation, app, or game, keep working toward an actual edit. Do not return status-only text before a write_file, patch_file, or editing terminal command has succeeded.",
+            "Set requires_edit=true for any request that needs project file changes. Keep it true on later steps until the edit is complete.",
+            "Set requires_test=true for any request that asks for tests, verification, or full completion of a coding task. Keep it true until a relevant check succeeds.",
             "When the current user_message contains active task state, treat it as authoritative continuity context. Continue the active task unless the message clearly starts a separate request.",
             "If the user gives a reasonable but underspecified creation request, choose a conservative project-local implementation and proceed; do not ask for clarification when you can proceed safely. Ask a question only when the missing choice would materially change the tool call or risk unwanted side effects.",
             "Read or inspect before editing existing code. Use project_overview, tree, glob, search, read, or read_lines to find the right target.",

@@ -66,7 +66,6 @@ sequenceDiagram
 关键实现点：
 
 - `SimpleAgent.run(message, on_step=...)` 内部用 `emit()` 同时写入 `trace` 和触发回调。
-- `_run_passive_project_diagnosis(..., on_step=...)` 也走同一套回调。
 - CLI 只负责渲染，不知道 agent 的内部状态机。
 - `_preview_step_content()` 截断长 tool result，避免把终端刷乱。
 
@@ -74,13 +73,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Start["run(message)"] --> Resolve["_resolve_task_frame()\n识别新 coding task 或继续 active_task"]
+    Start["run(message)"] --> Resolve["_resolve_task_frame()\n只处理已有 active_task 连续性"]
     Resolve --> AppendUser["sessions.append(user_message)"]
-    AppendUser --> Passive{"backend 存在\n且是被动诊断请求?"}
-    Passive -->|yes| PassiveDiag["_run_passive_project_diagnosis()\nproject_overview -> search -> read candidates -> text"]
-    PassiveDiag --> ReturnPassive["AgentResponse"]
-
-    Passive -->|no| BackendMode{"backend is None?"}
+    AppendUser --> BackendMode{"backend is None?"}
     BackendMode -->|yes| RulePlan["plan(...)\n显式命令/规则 fallback"]
     RulePlan --> RuleTool{"decision.tool_call?"}
     RuleTool -->|yes| RuleRun["tools.run()\nrecord tool_result\nemit tool_result"]
@@ -93,15 +88,16 @@ flowchart TD
     Plan --> PlanErr{"backend error?"}
     PlanErr -->|yes, 有 last tool| Fallback["返回 last tool result\n附 backend_error_fallback"]
     PlanErr -->|yes, 无 last tool| BackendErr["backend_error"]
-    PlanErr -->|no| Decision{"tool_call?"}
+    PlanErr -->|no| UpdateReq["合并模型声明\nrequires_edit / requires_test"]
+    UpdateReq --> Decision{"tool_call?"}
 
-    Decision -->|no text| NeedEdit{"用户需要改代码\n但未成功编辑?"}
+    Decision -->|no text| NeedEdit{"requires_edit\n但未成功编辑?"}
     NeedEdit -->|yes| PrematureEdit["premature_text_blocked\n要求继续 write_file/patch_file/terminal edit"]
     PrematureEdit --> Loop
     NeedEdit -->|no| NeedDiff{"已编辑\n但未 inspect diff?"}
     NeedDiff -->|yes| AutoDiff["自动 diff\nrecord tool_result"]
     AutoDiff --> NeedTest
-    NeedDiff -->|no| NeedTest{"用户要求测试\n但无成功测试?"}
+    NeedDiff -->|no| NeedTest{"requires_test\n但无成功测试?"}
     NeedTest -->|yes| PrematureTest["premature_text_blocked\n要求 run_tests 或 terminal test"]
     PrematureTest --> Loop
     NeedTest -->|no| FinalText["record assistant text\nmaybe mark active_task completed"]
@@ -119,10 +115,7 @@ flowchart TD
     ToolErr -->|yes| ToolError["tool_error\n结束"]
     ToolErr -->|no| Record["record tool_result\nemit tool_result\nappend run_observations"]
     Record --> UpdateFlags["更新 successful_edit\nsuccessful_test\ninspected_diff\ncompleted_inspections\nfailed_calls"]
-    UpdateFlags --> ShortCircuit{"read + 文件解释请求?"}
-    ShortCircuit -->|yes| Explain["_explain_file_after_read()"]
-    Explain --> ReturnExplain["AgentResponse"]
-    ShortCircuit -->|no| Followup["_tool_followup_message()\n把原始请求+run state+tool result 喂给下一轮"]
+    UpdateFlags --> Followup["_tool_followup_message()\n把原始请求+run state+tool result 喂给下一轮"]
     Followup --> Loop
 ```
 
@@ -130,7 +123,7 @@ flowchart TD
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NeedGrounding: 用户请求修改/创建/游戏/修复
+    [*] --> NeedGrounding: PlannerDecision.requires_edit=true
     NeedGrounding --> ToolPlanning: project_overview/tree/glob/search/read/read_lines
     ToolPlanning --> Editing: write_file 或 patch_file 或 terminal 编辑成功
     ToolPlanning --> BlockPrematureText: backend 提前给状态性 text
@@ -138,8 +131,8 @@ stateDiagram-v2
 
     Editing --> NeedDiff: successful_edit=True
     NeedDiff --> DiffDone: diff 成功
-    DiffDone --> NeedTest: 用户要求测试/验证
-    DiffDone --> FinalAnswer: 用户没有要求测试
+    DiffDone --> NeedTest: PlannerDecision.requires_test=true
+    DiffDone --> FinalAnswer: requires_test=false
 
     NeedTest --> TestPassed: run_tests 或 terminal pytest/unittest exit code 0
     NeedTest --> BlockPrematureTest: backend 提前总结
@@ -255,22 +248,20 @@ erDiagram
 
 ```mermaid
 flowchart TD
-    Msg["用户消息"] --> NeedChange{"_needs_code_change(message)?"}
-    NeedChange -->|yes| StartTask["_start_active_task()\nsession_state.active_task = JSON"]
-    StartTask --> Original["original_message = message\ntask_event = new_task"]
-
-    NeedChange -->|no| Load["_load_active_task()"]
+    Msg["用户消息"] --> Load["_load_active_task()"]
     Load --> HasTask{"存在 coding task\n且 status in_progress/awaiting_user?"}
     HasTask -->|no| Original2["当成普通新消息"]
-    HasTask -->|yes| Separate{"_is_obviously_separate_message()?"}
+    HasTask -->|yes| Separate{"显式工具命令或空消息?"}
     Separate -->|yes| Original2
     Separate -->|no| Continue["更新 last_user_message\n保存 active_task"]
     Continue --> Expanded["构造 expanded message:\nActive task id\nActive task goal\nCurrent user follow-up\n继续执行不要重新确认"]
     Expanded --> AgentLoop["进入 agent loop"]
-    Original --> AgentLoop
     Original2 --> AgentLoop
 
-    AgentLoop --> Done{"successful_edit\n且最终 text?"}
+    AgentLoop --> ModelReq{"PlannerDecision.requires_edit?"}
+    ModelReq -->|yes, 且无 active_task| StartTask["_start_active_task()\nsession_state.active_task = JSON"]
+    ModelReq -->|no| Done
+    StartTask --> Done{"successful_edit\n且最终 text?"}
     Done -->|yes| Complete["_set_active_task_status('completed')"]
     Done -->|no| Keep["保持 in_progress"]
 ```

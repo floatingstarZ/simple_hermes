@@ -69,12 +69,14 @@ class BackendResponseParsingTests(unittest.TestCase):
 
     def test_parse_response_text_accepts_json_fenced_block(self) -> None:
         decision = OpenAICompatibleBackend._parse_response_text(
-            '```json\n{"kind": "tool_call", "tool": "read", "argument": "README.md", "text": "Use read"}\n```'
+            '```json\n{"kind": "tool_call", "tool": "read", "argument": "README.md", "text": "Use read", "requires_edit": true, "requires_test": true}\n```'
         )
         self.assertEqual(decision.kind, "tool_call")
         self.assertIsNotNone(decision.tool_call)
         self.assertEqual(decision.tool_call.name, "read")
         self.assertEqual(decision.tool_call.argument, "README.md")
+        self.assertTrue(decision.requires_edit)
+        self.assertTrue(decision.requires_test)
 
     def test_parse_response_text_uses_first_object_when_trailing_text_would_be_extra_data(self) -> None:
         decision = OpenAICompatibleBackend._parse_response_text(
@@ -100,6 +102,8 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("status-only text", prompt)
         self.assertIn("do not ask for clarification", prompt)
         self.assertIn("autonomous coding assistant", prompt)
+        self.assertIn("requires_edit", prompt)
+        self.assertIn("requires_test", prompt)
 
     def test_planner_system_message_pushes_autonomous_tool_use(self) -> None:
         self.assertIn("autonomous planning layer", PLANNER_SYSTEM_MESSAGE)
@@ -186,8 +190,8 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIsNone(decision.tool_call)
         self.assertIn("I do not have a real LLM backend", decision.text)
 
-    def test_planner_starts_project_inspection_locally_for_codebase_requests(self) -> None:
-        backend = FakeBackend([PlannerDecision(kind="text", text="backend should not be first", tool_call=None)])
+    def test_planner_delegates_project_inspection_intent_to_backend(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="backend decides", tool_call=None)])
         agent = self._make_agent(
             project_root=self.project_root,
             base_dir=Path(self.temp_dir.name) / "state_project_inspection",
@@ -196,10 +200,10 @@ class AgentPlanningTests(unittest.TestCase):
 
         decision = agent.plan("先看这个 todo 项目，告诉我 active_items 当前逻辑。只做诊断结论。")
 
-        self.assertEqual(decision.kind, "tool_call")
-        self.assertIsNotNone(decision.tool_call)
-        self.assertEqual(decision.tool_call.name, "project_overview")
-        self.assertEqual(backend.calls, [])
+        self.assertEqual(decision.kind, "text")
+        self.assertIsNone(decision.tool_call)
+        self.assertEqual(decision.text, "backend decides")
+        self.assertEqual(len(backend.calls), 1)
 
     def test_agent_can_use_injected_backend_for_tool_choice(self) -> None:
         backend = FakeBackend([
@@ -244,15 +248,14 @@ class AgentPlanningTests(unittest.TestCase):
         finally:
             os.environ.pop("SIMPLE_HERMES_HERMES_ROOT", None)
 
-    def test_planner_detects_absolute_path_inside_natural_language_request(self) -> None:
+    def test_rule_mode_does_not_infer_tools_from_natural_language_path(self) -> None:
         path = self.project_root / "README.md"
         decision = self.agent.plan(f"{path}这个code干啥的")
-        self.assertEqual(decision.kind, "tool_call")
-        self.assertIsNotNone(decision.tool_call)
-        self.assertEqual(decision.tool_call.name, "read")
-        self.assertEqual(decision.tool_call.argument, str(path))
+        self.assertEqual(decision.kind, "text")
+        self.assertIsNone(decision.tool_call)
+        self.assertIn("I do not have a real LLM backend", decision.text)
 
-    def test_rule_mode_can_read_and_explain_file_from_natural_language_path_request(self) -> None:
+    def test_rule_mode_requires_explicit_read_command_for_file_access(self) -> None:
         code_path = self.project_root / "sample_module.py"
         code_path.write_text(
             "import os\n\n"
@@ -262,11 +265,11 @@ class AgentPlanningTests(unittest.TestCase):
             "    return os.getcwd()\n",
             encoding="utf-8",
         )
-        result = self.agent.run(f"请看看{code_path}这个code干啥的")
+        result = self.agent.run(f"read {code_path}")
         self.assertEqual(result.tool_used, "read")
-        self.assertIn("I read sample_module.py.", result.final_response)
-        self.assertIn("Classes: Demo.", result.final_response)
-        self.assertIn("Functions: run_task.", result.final_response)
+        self.assertIn("# sample_module.py", result.final_response)
+        self.assertIn("class Demo", result.final_response)
+        self.assertIn("def run_task", result.final_response)
 
     def test_backend_mode_explains_file_after_read_instead_of_timing_out(self) -> None:
         backend = FakeBackend([
@@ -290,7 +293,7 @@ class AgentPlanningTests(unittest.TestCase):
         result = agent.run(f"{target}这个code干啥的")
         self.assertEqual(result.tool_used, "read")
         self.assertIn("backend adapters", result.final_response)
-        self.assertLessEqual(result.steps, 1)
+        self.assertLessEqual(result.steps, 2)
 
     def test_cli_detects_repo_root_when_cwd_is_inside_repo(self) -> None:
         inside = self.project_root / "subdir" / "nested"
@@ -377,7 +380,19 @@ class AgentPlanningTests(unittest.TestCase):
             def plan(self, *, message: str, memory_block: str, history_text: str, tools_text: str) -> PlannerDecision:
                 self.calls.append({"message": message, "history_text": history_text})
                 if len(self.calls) == 1:
-                    self.saw_prior_diagnosis = "list(self.items)" in history_text
+                    return PlannerDecision(
+                        kind="tool_call",
+                        text="read active_items",
+                        tool_call=ToolCall(name="read", argument="todo_app/core.py"),
+                    )
+                if len(self.calls) == 2:
+                    return PlannerDecision(
+                        kind="text",
+                        text="诊断结论：当前实现直接返回 `list(self.items)`，应基于 `not item.completed` 过滤。我没有修改任何文件。",
+                        tool_call=None,
+                    )
+                if len(self.calls) == 3:
+                    self.saw_prior_diagnosis = "list(self.items)" in history_text and "not item.completed" in history_text
                     return PlannerDecision(
                         kind="tool_call",
                         text="patch active_items",
@@ -390,6 +405,7 @@ class AgentPlanningTests(unittest.TestCase):
                                 "        return [item for item in self.items if not item.completed]\n"
                             ),
                         ),
+                        requires_edit=True,
                     )
                 return PlannerDecision(kind="text", text="已根据上一轮诊断修复 active_items。", tool_call=None)
 
@@ -401,7 +417,6 @@ class AgentPlanningTests(unittest.TestCase):
         )
 
         first = agent.run("先看这个 todo 项目，告诉我 active_items 当前逻辑。只做诊断，不要修改文件。")
-        self.assertEqual(backend.calls, [])
         self.assertIn("当前实现直接返回 `list(self.items)`", first.final_response)
         self.assertIn("not item.completed", first.final_response)
         self.assertIn("return list(self.items)", core_file.read_text(encoding="utf-8"))
@@ -542,7 +557,7 @@ class AgentPlanningTests(unittest.TestCase):
         target = self.project_root / "notes.txt"
         target.write_text("old value", encoding="utf-8")
         backend = FakeBackend([
-            PlannerDecision(kind="tool_call", text="read file", tool_call=ToolCall(name="read", argument="notes.txt")),
+            PlannerDecision(kind="tool_call", text="read file", tool_call=ToolCall(name="read", argument="notes.txt"), requires_edit=True),
             PlannerDecision(kind="text", text="I have not changed the file yet.", tool_call=None),
             PlannerDecision(kind="tool_call", text="patch file", tool_call=ToolCall(name="patch_file", argument="notes.txt ::: old ::: new")),
             PlannerDecision(kind="tool_call", text="inspect diff", tool_call=ToolCall(name="diff", argument="notes.txt")),
@@ -575,6 +590,8 @@ class AgentPlanningTests(unittest.TestCase):
                     name="terminal",
                     argument="python3 -c 'from pathlib import Path; Path(\"notes.txt\").write_text(\"new value\", encoding=\"utf-8\")'",
                 ),
+                requires_edit=True,
+                requires_test=True,
             ),
             PlannerDecision(kind="text", text="Edited but not tested.", tool_call=None),
             PlannerDecision(kind="tool_call", text="run tests", tool_call=ToolCall(name="run_tests", argument="")),
@@ -592,7 +609,7 @@ class AgentPlanningTests(unittest.TestCase):
 
     def test_backend_loop_does_not_count_zero_tests_as_success(self) -> None:
         backend = FakeBackend([
-            PlannerDecision(kind="tool_call", text="write file", tool_call=ToolCall(name="write_file", argument="notes.txt ::: done")),
+            PlannerDecision(kind="tool_call", text="write file", tool_call=ToolCall(name="write_file", argument="notes.txt ::: done"), requires_edit=True, requires_test=True),
             PlannerDecision(
                 kind="tool_call",
                 text="bad test target",
@@ -622,7 +639,7 @@ class AgentPlanningTests(unittest.TestCase):
 
     def test_backend_loop_treats_create_fix_and_add_as_code_changes(self) -> None:
         backend = FakeBackend([
-            PlannerDecision(kind="text", text="I can create that file.", tool_call=None),
+            PlannerDecision(kind="text", text="I can create that file.", tool_call=None, requires_edit=True),
             PlannerDecision(kind="tool_call", text="write file", tool_call=ToolCall(name="write_file", argument="notes.txt ::: created")),
             PlannerDecision(kind="text", text="Created notes.txt.", tool_call=None),
         ])
@@ -678,7 +695,7 @@ class AgentPlanningTests(unittest.TestCase):
             encoding="utf-8",
         )
         backend = FakeBackend([
-            PlannerDecision(kind="tool_call", text="inspect project", tool_call=ToolCall(name="project_overview", argument="")),
+            PlannerDecision(kind="tool_call", text="inspect project", tool_call=ToolCall(name="project_overview", argument=""), requires_edit=True, requires_test=True),
             PlannerDecision(kind="tool_call", text="list code", tool_call=ToolCall(name="glob", argument="**/*")),
             PlannerDecision(kind="tool_call", text="read game", tool_call=ToolCall(name="read", argument="src/game.js")),
             PlannerDecision(kind="text", text="I found the scoring rule but have not changed it yet.", tool_call=None),
@@ -702,7 +719,7 @@ class AgentPlanningTests(unittest.TestCase):
 
     def test_coding_request_blocks_clarification_and_pushes_backend_to_write(self) -> None:
         backend = FakeBackend([
-            PlannerDecision(kind="text", text="请先说明你想要哪种版本。", tool_call=None),
+            PlannerDecision(kind="text", text="请先说明你想要哪种版本。", tool_call=None, requires_edit=True),
             PlannerDecision(
                 kind="tool_call",
                 text="write snake game",

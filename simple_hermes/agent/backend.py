@@ -23,6 +23,8 @@ class PlannerDecision:
     kind: str
     text: str
     tool_call: Optional[ToolCall] = None
+    requires_edit: bool = False
+    requires_test: bool = False
 
 
 class LLMBackend:
@@ -70,11 +72,25 @@ class OpenAICompatibleBackend(LLMBackend):
         data = OpenAICompatibleBackend._load_planner_json(content)
         kind = str(data.get("kind", "text")).strip()
         text = str(data.get("text", "")).strip()
+        requires_edit = bool(data.get("requires_edit", False))
+        requires_test = bool(data.get("requires_test", False))
         if kind == "tool_call":
             tool = str(data.get("tool", "")).strip()
             argument = str(data.get("argument", "")).strip()
-            return PlannerDecision(kind="tool_call", text=text or f"Use tool {tool}", tool_call=ToolCall(tool, argument))
-        return PlannerDecision(kind="text", text=text or "The model returned a text decision.", tool_call=None)
+            return PlannerDecision(
+                kind="tool_call",
+                text=text or f"Use tool {tool}",
+                tool_call=ToolCall(tool, argument),
+                requires_edit=requires_edit,
+                requires_test=requires_test,
+            )
+        return PlannerDecision(
+            kind="text",
+            text=text or "The model returned a text decision.",
+            tool_call=None,
+            requires_edit=requires_edit,
+            requires_test=requires_test,
+        )
 
     def _chat_completions_plan(self, prompt: str) -> PlannerDecision:
         body = {
