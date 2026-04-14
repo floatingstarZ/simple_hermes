@@ -13,6 +13,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def parse_unittest_output(output: str) -> list[dict[str, str]]:
+    """从 unittest -v 输出中提取单测名称、类名和状态，供 HTML 报告渲染使用。"""
     tests: list[dict[str, str]] = []
     pattern = re.compile(r"^(?P<name>\S+)\s+\((?P<class>[^)]+)\)\s+\.\.\.\s+(?P<status>ok|FAIL|ERROR|skipped .+)$")
     for line in output.splitlines():
@@ -31,10 +32,12 @@ def parse_unittest_output(output: str) -> list[dict[str, str]]:
 
 
 def strip_ansi(text: str) -> str:
+    """去掉终端颜色控制符，避免 trace 报告里混入不可见字符。"""
     return ANSI_RE.sub("", text)
 
 
 def parse_trace_steps(output: str) -> list[dict[str, str]]:
+    """从 simple_hermes_codex 的流式 progress 文本中解析 step 行。"""
     steps: list[dict[str, str]] = []
     pattern = re.compile(r"step (?P<step>\d+) · (?P<kind>\S+)(?: \[(?P<tool>[^\]]+)\])?\s*(?P<detail>.*)")
     for line in strip_ansi(output).splitlines():
@@ -54,6 +57,7 @@ def parse_trace_steps(output: str) -> list[dict[str, str]]:
 
 
 def write_html_report(path: Path, *, command: list[str], cwd: Path, returncode: int, tests: list[dict[str, str]], output: str) -> None:
+    """把 unittest 结果写成可视化 HTML，同时保留完整 raw log。"""
     passed = sum(1 for test in tests if test["status"] == "ok")
     failed = len(tests) - passed
     rows = []
@@ -115,6 +119,7 @@ def write_html_report(path: Path, *, command: list[str], cwd: Path, returncode: 
 
 
 def write_trace_html_report(path: Path, *, title: str, log_path: Path, output: str) -> None:
+    """把 agent trace 日志渲染成 HTML，方便检查每个 step 的工具调用进展。"""
     clean_output = strip_ansi(output)
     steps = parse_trace_steps(output)
     rows = []
@@ -172,6 +177,7 @@ def write_trace_html_report(path: Path, *, title: str, log_path: Path, output: s
 
 
 def main() -> int:
+    """命令行入口：默认运行单测；传入 --render-log 时只渲染已有 trace。"""
     parser = argparse.ArgumentParser(description="Run Simple Hermes tests and write log/json/html artifacts.")
     parser.add_argument("--render-log", type=Path, help="Render an existing plain-text trace log as HTML.")
     parser.add_argument("--title", default="Simple Hermes Codex Trace Report")

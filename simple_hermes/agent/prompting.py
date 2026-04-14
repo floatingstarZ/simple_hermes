@@ -20,6 +20,12 @@ PLANNER_SYSTEM_MESSAGE = (
 
 
 def build_planner_prompt(ctx: PromptContext) -> str:
+    """用结构化数据构造 planner 合约，而不是只靠自然语言提示。
+
+    这里显式要求后端输出 `requires_edit` 和 `requires_test`，这样 Python 主循环
+    不需要用本地关键词表去猜用户是不是要改代码、是不是要测试。模型声明需求
+    之后，本地循环再负责执行进度约束。
+    """
     payload = {
         "task": "Plan the next concrete step for an autonomous coding assistant. Return exactly one JSON decision: either call one available tool or give final text.",
         "output_schema": {

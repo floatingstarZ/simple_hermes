@@ -449,8 +449,8 @@ def _handle_ui_command(message: str, agent: SimpleAgent, mode: str) -> bool:
 def _create_prompt_session() -> "PromptSession | None":
     if PromptSession is None or FileHistory is None or PTStyle is None:
         return None
-    # prompt_toolkit expects a real TTY. In piped/heredoc smoke tests we should
-    # fall back to plain input() instead of emitting warnings.
+    # prompt_toolkit 需要真实 TTY；在管道/heredoc 冒烟测试里回退到 input()，
+    # 避免测试日志里出现无意义的终端警告。
     if not os.isatty(0) or not os.isatty(1):
         return None
     history_path = BASE_DIR / "prompt_history.txt"
@@ -469,9 +469,8 @@ def _create_prompt_session() -> "PromptSession | None":
 
 def _read_input(session: "PromptSession | None") -> str:
     if session is not None:
-        # prompt_toolkit handles cursor positioning, backspace, arrow keys,
-        # and history correctly. This matches Hermes' approach much better than
-        # plain input() for interactive terminal UX.
+        # prompt_toolkit 能正确处理光标、退格、方向键和历史记录，比裸 input()
+        # 更接近 Hermes 的交互式终端体验。
         return session.prompt([
             ("class:prompt", APP_NAME),
             ("class:marker", " > "),

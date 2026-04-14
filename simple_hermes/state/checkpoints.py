@@ -25,10 +25,16 @@ class CheckpointRecord:
 
 
 class CheckpointStore:
-    """Small project-scoped text snapshot store for local rollback."""
+    """项目级文本快照存储，用于本地回滚。
+
+    它不是 git 的替代品，只是给 agent 自动写文件提供一层轻量保险：
+    `write_file` 或 `patch_file` 之前保存小型文本文件快照，后续可通过
+    `/undo` 或 `rollback` 恢复。
+    """
 
     def __init__(self, project_root: Path, base_dir: Path | None = None) -> None:
         self.project_root = project_root.resolve()
+        # 用项目路径哈希隔离不同项目的快照，同时避免在目录名里暴露很长的绝对路径。
         digest = hashlib.sha1(str(self.project_root).encode("utf-8")).hexdigest()[:16]
         self.base_dir = (base_dir or BASE_DIR) / "checkpoints" / digest
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -37,6 +43,7 @@ class CheckpointStore:
         return self.base_dir / f"{checkpoint_id}.json"
 
     def _should_skip(self, path: Path) -> bool:
+        """创建文本快照时跳过生成物、二进制文件以及日志/trace 目录。"""
         if any(part in SKIP_PARTS for part in path.parts):
             return True
         if path.name.startswith(".") and path.name not in {".env"}:
@@ -44,6 +51,7 @@ class CheckpointStore:
         return path.suffix.lower() in SKIP_SUFFIXES
 
     def _iter_project_files(self) -> list[Path]:
+        """收集数量受限的项目文本文件候选集。"""
         files: list[Path] = []
         for path in self.project_root.rglob("*"):
             if path.is_dir() or self._should_skip(path):
@@ -54,6 +62,7 @@ class CheckpointStore:
         return files
 
     def create(self, reason: str = "manual") -> CheckpointRecord:
+        """为项目文本文件创建一个 JSON 快照。"""
         checkpoint_id = time.strftime("cp-%Y%m%d-%H%M%S")
         candidate = self._checkpoint_path(checkpoint_id)
         counter = 1
@@ -99,6 +108,7 @@ class CheckpointStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def list_records(self, limit: int = 10) -> list[CheckpointRecord]:
+        """按快照记录里的时间戳返回最新记录，而不是依赖文件名排序。"""
         records: list[CheckpointRecord] = []
         for path in self.base_dir.glob("cp-*.json"):
             try:
@@ -124,6 +134,7 @@ class CheckpointStore:
         return records[0].checkpoint_id if records else None
 
     def restore(self, checkpoint_id: str | None = None) -> str:
+        """恢复指定快照，并删除快照之后新出现的已跟踪文本文件。"""
         target_id = checkpoint_id or self.latest_id()
         if not target_id:
             return "No checkpoints found."

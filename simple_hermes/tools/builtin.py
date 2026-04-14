@@ -53,6 +53,13 @@ class BackgroundTask:
 
 
 class BuiltInTools:
+    """暴露给 planner 和显式 CLI 命令的内置工具实现。
+
+    工具层应比 agent planner 更确定：这里处理文件系统边界、命令安全保护、
+    回滚快照以及会话/记忆写入等副作用。自然语言意图判断应放在 planner，
+    这个类只执行已经确定的具体工具请求。
+    """
+
     def __init__(
         self,
         memory: MemoryStore,
@@ -83,6 +90,7 @@ class BuiltInTools:
         self._register_tools()
 
     def _is_sensitive_path(self, path: Path) -> bool:
+        """识别常见可能包含密钥的文件名、后缀和目录。"""
         parts = {part.lower() for part in path.parts}
         if parts & SENSITIVE_PARTS:
             return True
@@ -92,6 +100,7 @@ class BuiltInTools:
         return any(name.endswith(suffix) for suffix in SENSITIVE_SUFFIXES)
 
     def _register_tools(self) -> None:
+        """集中注册工具名和面向 planner 的可读说明。"""
         self.registry.register("remember", "Save a durable fact to general memory", self.remember)
         self.registry.register("remember_user", "Save a durable fact about the user", self.remember_user)
         self.registry.register("memories", "List saved general memories", self.memories)
@@ -257,6 +266,10 @@ class BuiltInTools:
         return self._truncate("\n".join(output))
 
     def _test_env(self) -> dict[str, str]:
+        """运行项目测试前移除 agent 自身后端环境变量。
+
+        测试命令应该验证用户项目，而不是误用 agent 自己的 LLM/backend 配置。
+        """
         env = os.environ.copy()
         for key in (
             "SIMPLE_HERMES_BACKEND",
@@ -272,11 +285,13 @@ class BuiltInTools:
         return env
 
     def _truncate(self, text: str) -> str:
+        """限制工具输出长度，避免撑爆下一轮 planner prompt。"""
         if len(text) <= MAX_TOOL_OUTPUT_CHARS:
             return text
         return text[:MAX_TOOL_OUTPUT_CHARS] + "\n...[truncated]..."
 
     def _missing_path_message(self, display_path: str, path: Path) -> str:
+        """请求路径不存在时，按同名文件给出项目内候选路径。"""
         basename = path.name
         suggestions: List[str] = []
         if basename:
@@ -296,6 +311,7 @@ class BuiltInTools:
         return f"File not found: {display_path}"
 
     def _terminal_refusal_reason(self, command: str) -> str | None:
+        """执行 shell 命令前应用本地安全策略。"""
         if not command:
             return "Usage: terminal <command>"
         if ">" in command:
@@ -310,10 +326,12 @@ class BuiltInTools:
         return None
 
     def _remember_file_snapshot(self, display_path: str, path: Path) -> None:
+        """记录编辑前内容，供非 git 项目的 diff 回退逻辑使用。"""
         if display_path not in self._file_snapshots and path.exists() and path.is_file():
             self._file_snapshots[display_path] = path.read_text(encoding="utf-8", errors="ignore")
 
     def _snapshot_diff(self, display_path: str, path: Path) -> str | None:
+        """为非 git 项目中已编辑的文件生成内存 diff。"""
         if display_path not in self._file_snapshots:
             return None
         before = self._file_snapshots[display_path].splitlines(keepends=True)
@@ -322,6 +340,7 @@ class BuiltInTools:
         return diff or f"No changes since first edit snapshot for {display_path}."
 
     def _snapshot_diffs(self, raw: str) -> list[str]:
+        """返回单个路径或全部已编辑快照的 diff 回退结果。"""
         if raw:
             path, display_path, error = self._resolve_project_path(raw)
             if error:
@@ -556,6 +575,7 @@ class BuiltInTools:
         return result
 
     def checkpoint(self, text: str) -> str:
+        """手动创建或列出 checkpoint 的工具入口。"""
         raw = text.strip()
         if not raw or raw == "create":
             record = self.checkpoints.create(reason="manual")
@@ -576,11 +596,13 @@ class BuiltInTools:
         return "Usage: checkpoint [list|create <reason>]"
 
     def rollback(self, text: str) -> str:
+        """恢复 checkpoint；默认恢复最近一次快照。"""
         raw = text.strip()
         checkpoint_id = None if not raw or raw == "latest" else raw
         return self.checkpoints.restore(checkpoint_id=checkpoint_id)
 
     def run_tests(self, text: str) -> str:
+        """用保守默认值运行有超时限制的项目测试命令。"""
         raw = text.strip()
         if not raw:
             if (self.project_root / "package.json").exists() and not (self.project_root / "tests").is_dir():
@@ -834,6 +856,7 @@ class BuiltInTools:
         return f"Stopped background task {task.task_id} with exit code {returncode}."
 
     def background(self, text: str) -> str:
+        """分发后台 shell 任务管理子命令。"""
         raw = text.strip()
         if not raw:
             return "Usage: background start <cmd> | list | status [id] | tail <id> | wait <id> [seconds] | stop <id>"
@@ -854,6 +877,7 @@ class BuiltInTools:
         return "Unknown background action. Use: start, list, status, tail, wait, or stop."
 
     def write_file(self, text: str) -> str:
+        """创建或覆盖文本文件；写入前先创建 checkpoint。"""
         usage = "Usage: write_file <path> <content> or write_file <path>\\n<content>"
         if " ::: " in text:
             path_text, content = text.split(" ::: ", 1)
@@ -875,6 +899,7 @@ class BuiltInTools:
         return f"Wrote file {display_path} ({len(content)} chars)."
 
     def patch_file(self, text: str) -> str:
+        """精确替换文件文本；替换前先创建 checkpoint。"""
         usage = (
             "Usage: patch_file <path> ::: <exact target> ::: <replacement> "
             "or patch_file <path>\\n<target>\\n---\\n<replacement>"

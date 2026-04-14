@@ -57,7 +57,16 @@ class AgentResponse:
 
 
 class SimpleAgent:
-    """A tiny educational agent loop with continuity and delegation skeletons."""
+    """带持久状态和受控工具调用的小型 code agent 主循环。
+
+    这里刻意拆成两层：
+    - 本地确定性控制流负责会话、工具、回滚、重复失败恢复；
+    - 后端 planner 负责自然语言意图，例如这轮是否需要编辑、是否需要验证。
+
+    这个边界很重要：本地代码不要重新引入“包含 fix 就认为要编辑”这类宽泛的
+    关键词意图路由；是否需要编辑/测试应由 planner 通过
+    `PlannerDecision.requires_edit` 和 `PlannerDecision.requires_test` 表达。
+    """
 
     def __init__(
         self,
@@ -114,6 +123,7 @@ class SimpleAgent:
         ).registry
 
     def _load_active_task(self) -> dict | None:
+        """读取持久化的当前编码任务；遇到损坏状态时直接丢弃。"""
         raw = self.sessions.get_state(self.session_id, ACTIVE_TASK_STATE_KEY)
         if not raw:
             return None
@@ -125,10 +135,12 @@ class SimpleAgent:
         return task if isinstance(task, dict) else None
 
     def _save_active_task(self, task: dict) -> None:
+        """把当前任务以 JSON 形式写入会话局部状态表。"""
         task["updated_at"] = time.time()
         self.sessions.set_state(self.session_id, ACTIVE_TASK_STATE_KEY, json.dumps(task, ensure_ascii=False))
 
     def _start_active_task(self, message: str, category: str = "coding") -> dict:
+        """在 planner 声明需要编辑之后，创建一个可跨轮次延续的任务框架。"""
         task = {
             "id": uuid.uuid4().hex[:12],
             "category": category,
@@ -142,6 +154,7 @@ class SimpleAgent:
         return task
 
     def _set_active_task_status(self, status: str) -> None:
+        """只更新当前任务状态，不隐式创建新任务。"""
         task = self._load_active_task()
         if task is None:
             return
@@ -149,6 +162,11 @@ class SimpleAgent:
         self._save_active_task(task)
 
     def _is_explicit_separate_message(self, message: str) -> bool:
+        """只识别硬性的 UI/工具边界，不判断自然语言意图。
+
+        类似 “HTML version” 或 “continue” 的短追问应继续挂在当前任务上。
+        显式工具命令则保持独立，因为这时用户是在直接控制工具层。
+        """
         stripped = message.strip()
         if not stripped:
             return True
@@ -157,6 +175,11 @@ class SimpleAgent:
         return False
 
     def _resolve_task_frame(self, message: str) -> tuple[str, dict | None, str | None]:
+        """在合适的时候把短追问接到已有编码任务上。
+
+        新任务不再通过这里的关键词启发式识别。只有后端 planner 设置
+        `requires_edit=True` 后，才会创建新的任务框架。
+        """
         task = self._load_active_task()
         if task is None or task.get("category") != "coding":
             return message, task, None
@@ -178,11 +201,13 @@ class SimpleAgent:
         return expanded, task, "continued_task"
 
     def _format_run_state(self, observations: List[str]) -> str:
+        """把本轮工具观察结果压缩成下一步 planner 可读的状态摘要。"""
         if not observations:
             return "Run state so far: no tool calls have completed in this run."
         return "Run state so far:\n" + "\n".join(observations[-8:])
 
     def _compact_observation(self, tool_name: str, argument: str, result: str) -> str:
+        """压缩单个工具结果，避免下一轮 planner prompt 过长。"""
         preview = result.replace("\n", "\\n")
         if len(preview) > 700:
             preview = preview[:700] + "...[truncated]"
@@ -192,6 +217,11 @@ class SimpleAgent:
         return f"- {tool_name}({rendered_arg!r}) -> {preview}"
 
     def _tool_followup_message(self, original_message: str, tool_name: str, result: str, observations: List[str]) -> str:
+        """工具调用之后构造下一轮 planner 消息。
+
+        后端会同时看到原始请求、简短运行状态和当前工具的完整结果。这样模型能基于
+        真实观察继续推进，而不是依赖 Python 侧隐藏的意图推断。
+        """
         failure_hint = ""
         if tool_name in {"run_tests", "terminal"} and "exit code: 0" not in result:
             failure_hint = (
@@ -208,6 +238,11 @@ class SimpleAgent:
         )
 
     def _plan_tool(self, message: str) -> Tuple[Optional[str], str]:
+        """只解析显式工具命令。
+
+        这里刻意不从自然语言路径推断 `read`，也不从“分析项目”这类表达推断
+        `project_overview`。真实 LLM 模式下，这些选择应交给后端 planner。
+        """
         message = message.strip()
         lower = message.lower()
         prefixes = [
@@ -255,6 +290,7 @@ class SimpleAgent:
         )
 
     def _backend_history_text(self, limit: int = 12) -> str:
+        """为后端 planner 准备最近对话上下文。"""
         rows = self.sessions.history(session_id=self.session_id, limit=limit)
         if not rows:
             return ""
@@ -275,6 +311,7 @@ class SimpleAgent:
         return "\n".join(lines)
 
     def plan(self, message: str, allow_explicit_tools: bool = True) -> PlannerDecision:
+        """从显式命令或后端 planner 获得一个规划决策。"""
         if allow_explicit_tools:
             tool_name, arg = self._plan_tool(message)
             if tool_name:
@@ -294,6 +331,7 @@ class SimpleAgent:
         return PlannerDecision(kind="text", text=self._fallback_text(), tool_call=None)
 
     def _compression_threshold(self) -> int:
+        """读取历史压缩阈值，并在配置异常时使用有界默认值。"""
         raw = os.getenv("SIMPLE_HERMES_COMPRESSION_THRESHOLD", "").strip()
         if not raw:
             return 10
@@ -304,18 +342,21 @@ class SimpleAgent:
         return max(4, min(value, 200))
 
     def _preview_message(self, content: str, limit: int = 180) -> str:
+        """生成交接摘要里使用的单行预览。"""
         preview = re.sub(r"\s+", " ", content).strip()
         if len(preview) > limit:
             return preview[:limit] + "..."
         return preview
 
     def _truncate_block(self, content: str, limit: int = 1200) -> str:
+        """后端失败时压缩记忆/历史块，保证回退文本可读。"""
         content = content.strip()
         if len(content) > limit:
             return content[:limit] + "\n...[truncated]"
         return content
 
     def _backend_unavailable_fallback_text(self, error: Exception) -> str:
+        """首个后端调用断开时，返回仍然有用的本地记忆和会话上下文。"""
         memory_block = self.memory.as_prompt_block().strip() or "No durable/user memories saved."
         history_text = self._backend_history_text(limit=8).strip() or "No recent session history."
         return (
@@ -328,6 +369,7 @@ class SimpleAgent:
         )
 
     def _unique_nonempty(self, items: List[str], limit: int) -> List[str]:
+        """对摘要候选项去重，同时保持原始顺序。"""
         seen = set()
         out = []
         for item in items:
@@ -341,6 +383,11 @@ class SimpleAgent:
         return out
 
     def _build_handoff_summary(self, history: List[dict]) -> str:
+        """为长会话生成可延续的压缩摘要。
+
+        这只是对已存历史的轻量摘要器，不是 planner。它抽取明显的产物、约束和进展，
+        让 continuation session 在原始历史很长时也能保留足够上下文。
+        """
         user_rows = [row for row in history if row.get("role") == "user"]
         assistant_rows = [
             row for row in history
@@ -395,6 +442,7 @@ class SimpleAgent:
         )
 
     def _continuation_tail(self, history: List[dict], limit: int = 4) -> List[dict]:
+        """压缩后仍原样保留最近几条非工具消息。"""
         tail = [
             row for row in history
             if row.get("role") != "summary" and row.get("kind") != "tool_result"
@@ -402,6 +450,7 @@ class SimpleAgent:
         return tail[-limit:]
 
     def _maybe_compress_history(self) -> None:
+        """当新消息累计到阈值后，创建 continuation session。"""
         history = self.sessions.history(session_id=self.session_id, limit=200)
         last_summary_index = -1
         for index, row in enumerate(history):
@@ -426,6 +475,7 @@ class SimpleAgent:
         self.session_id = continuation_id
 
     def compress_now(self) -> str:
+        """手动 `/compress` 入口，用于强制创建 continuation session。"""
         history = self.sessions.history(session_id=self.session_id, limit=200)
         if not history:
             return "No session history to compress."
@@ -450,6 +500,7 @@ class SimpleAgent:
         )
 
     def _child_allowed_tools(self) -> set[str] | None:
+        """计算父 agent 和子 agent 工具白名单的交集。"""
         child_tools = allowed_tools_from_env("SIMPLE_HERMES_CHILD_ALLOWED_TOOLS")
         if child_tools is None:
             return None if self.allowed_tools is None else set(self.allowed_tools)
@@ -458,6 +509,7 @@ class SimpleAgent:
         return set(self.allowed_tools) & child_tools
 
     def _delegate_task(self, task: str) -> str:
+        """运行一个有步数限制的子 agent，并返回面向父 agent 的简短摘要。"""
         if self.delegation_depth >= self.max_delegation_depth:
             return "Delegation refused: tiny delegation depth limit reached."
         task = task.strip()
@@ -487,6 +539,7 @@ class SimpleAgent:
         return f"Child agent summary ({child_session_id}): {summary}"
 
     def _parallel_delegate(self, subtasks: List[str]) -> str:
+        """使用独立 SQLite 连接并行运行多个子 agent 子任务。"""
         child_specs = [
             (subtask, self.sessions.create_child_session(self.session_id, title=subtask[:80]))
             for subtask in subtasks
@@ -522,10 +575,12 @@ class SimpleAgent:
         return "Parallel child summaries:\n" + "\n".join(summaries)
 
     def _next_background_agent_id(self) -> str:
+        """生成当前进程内唯一的后台 agent id。"""
         self._background_agent_counter += 1
         return f"agent-bg{self._background_agent_counter}"
 
     def start_background_agent(self, prompt: str) -> str:
+        """在 daemon 线程中启动子 agent，并把最终结果写回父会话。"""
         prompt = prompt.strip()
         if not prompt:
             return "Usage: /background <prompt> or /background list|status <id>|wait <id>"
@@ -590,6 +645,7 @@ class SimpleAgent:
         return f"Started background agent {task_id} in child session {child_session_id}."
 
     def background_agents_text(self) -> str:
+        """渲染当前 CLI 进程知道的所有后台 agent。"""
         if not self._background_agent_tasks:
             return "No background agents in this process."
         lines = ["Background agents:"]
@@ -600,6 +656,7 @@ class SimpleAgent:
         return "\n".join(lines)
 
     def background_agent_status(self, task_id: str) -> str:
+        """渲染单个后台 agent 的状态、结果或错误。"""
         task = self._background_agent_tasks.get(task_id.strip())
         if task is None:
             return f"Unknown background agent: {task_id}"
@@ -613,6 +670,7 @@ class SimpleAgent:
             return text
 
     def wait_background_agent(self, task_id: str, timeout: float | None = None) -> str:
+        """等待一个后台线程，然后渲染它的当前状态。"""
         task = self._background_agent_tasks.get(task_id.strip())
         if task is None:
             return f"Unknown background agent: {task_id}"
@@ -621,14 +679,17 @@ class SimpleAgent:
         return self.background_agent_status(task_id)
 
     def _tool_result_message(self, tool_name: str, result: str) -> str:
+        """工具结果写入会话历史时使用的规范格式。"""
         return f"[tool:{tool_name}] {result}"
 
     def _trace_decision_content(self, decision: PlannerDecision) -> str:
+        """把 planner 决策压缩成适合 CLI progress 显示的文本。"""
         if decision.tool_call is None:
             return decision.text
         return f"{decision.text} | argument={decision.tool_call.argument}"
 
     def _inspection_call_key(self, tool_name: str, argument: str) -> tuple[str, str]:
+        """规范化检查类工具调用，便于阻断重复的大范围读取。"""
         normalized = argument.strip()
         if tool_name == "project_overview":
             normalized = ""
@@ -637,6 +698,7 @@ class SimpleAgent:
         return tool_name, normalized
 
     def _looks_like_failed_tool_result(self, result: str) -> bool:
+        """识别已知工具失败文本，用于重复调用恢复逻辑。"""
         prefixes = (
             "File not found:",
             "Path not found:",
@@ -649,6 +711,7 @@ class SimpleAgent:
         return result.startswith(prefixes)
 
     def _repeated_failure_message(self, original_message: str, tool_name: str, argument: str, result: str, observations: List[str]) -> str:
+        """要求后端从失败中恢复，而不是重复同一个失败工具调用。"""
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
@@ -658,6 +721,7 @@ class SimpleAgent:
         )
 
     def _repeated_read_message(self, original_message: str, argument: str, result: str, observations: List[str]) -> str:
+        """要求后端使用已读文件结果，避免读取同一文件形成循环。"""
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
@@ -668,6 +732,7 @@ class SimpleAgent:
         )
 
     def _repeated_inspection_message(self, original_message: str, tool_name: str, argument: str, result: str, observations: List[str]) -> str:
+        """重复检查后要求后端缩小范围或进入编辑步骤。"""
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
@@ -678,6 +743,7 @@ class SimpleAgent:
         )
 
     def _premature_text_message(self, original_message: str, text: str, observations: List[str]) -> str:
+        """planner 在必需编辑完成前试图结束时，构造恢复提示。"""
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
@@ -690,6 +756,7 @@ class SimpleAgent:
         )
 
     def _premature_test_message(self, original_message: str, text: str, observations: List[str]) -> str:
+        """planner 在必需验证完成前试图结束时，构造恢复提示。"""
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
@@ -699,6 +766,7 @@ class SimpleAgent:
         )
 
     def _record_tool_result(self, tool_name: str, result: str) -> None:
+        """带元数据持久化工具结果，支撑 recall 和 `/tool-results`。"""
         self.sessions.append(
             "assistant",
             self._tool_result_message(tool_name, result),
@@ -708,6 +776,7 @@ class SimpleAgent:
         )
 
     def _terminal_may_have_edited(self, argument: str, result: str) -> bool:
+        """尽力判断成功的 terminal 命令是否修改了文件。"""
         if "exit code: 0" not in result:
             return False
         lower_arg = argument.lower()
@@ -723,6 +792,7 @@ class SimpleAgent:
         return any(hint in lower_arg for hint in edit_hints)
 
     def _tool_result_is_successful_test(self, tool_name: str, argument: str, result: str) -> bool:
+        """识别成功验证，并排除 “Ran 0 tests” 这类空跑。"""
         if "exit code: 0" not in result:
             return False
         if "Ran 0 tests" in result:
@@ -733,12 +803,24 @@ class SimpleAgent:
         return tool_name == "terminal" and ("pytest" in lower_arg or "unittest" in lower_arg)
 
     def _tool_result_is_diff(self, tool_name: str, result: str) -> bool:
+        """跟踪成功编辑后是否已经检查过 diff。"""
         return tool_name == "diff" and not self._looks_like_failed_tool_result(result)
 
     def _record_assistant_text(self, text: str) -> None:
+        """把最终 assistant 文本写入当前会话。"""
         self.sessions.append("assistant", text, session_id=self.session_id, kind="assistant_text")
 
     def run(self, message: str, on_step: Callable[[AgentTraceStep], None] | None = None) -> AgentResponse:
+        """让一轮用户输入经过 planner/tool 主循环。
+
+        这里最关键的状态变量是：
+        - `requires_edit` 和 `requires_test`：来自 planner 决策或已有 active task；
+        - `successful_edit`、`successful_test`、`inspected_diff`：来自工具结果；
+        - `failed_calls` 和 `completed_inspections`：用于把 planner 从循环中拉出来。
+
+        这个函数刻意不做自然语言意图分类，只在 planner/工具状态已经显式给出需求后
+        执行进度约束。
+        """
         trace: List[AgentTraceStep] = []
 
         def emit(item: AgentTraceStep) -> None:

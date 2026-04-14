@@ -20,6 +20,13 @@ class ToolCall:
 
 @dataclass
 class PlannerDecision:
+    """agent 主循环使用的统一规划结果。
+
+    `requires_edit` 和 `requires_test` 必须来自模型侧 planner，而不是本地
+    Python 代码用关键词猜测用户意图。主循环只在 planner 明确声明“本轮需要
+    编辑/验证”之后，才强制继续推进编辑或测试步骤。
+    """
+
     kind: str
     text: str
     tool_call: Optional[ToolCall] = None
@@ -33,7 +40,7 @@ class LLMBackend:
 
 
 class OpenAICompatibleBackend(LLMBackend):
-    """Minimal OpenAI-compatible planner backend using plain HTTP."""
+    """基于普通 HTTP 的最小 OpenAI-compatible planner 后端。"""
 
     def __init__(self, base_url: str, api_key: str, model: str, api_mode: str = "chat_completions") -> None:
         self.base_url = base_url.rstrip("/")
@@ -43,6 +50,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
     @staticmethod
     def _load_planner_json(content: str) -> dict:
+        """从可能夹杂解释文本的模型回复里提取第一个 JSON 对象。"""
         candidates = []
         fence_match = re.search(r"```json\s*(.*?)\s*```", content, flags=re.IGNORECASE | re.DOTALL)
         if fence_match:
@@ -69,6 +77,7 @@ class OpenAICompatibleBackend(LLMBackend):
 
     @staticmethod
     def _parse_response_text(content: str) -> PlannerDecision:
+        """把不同后端返回的文本统一转换成 agent 主循环认识的决策类型。"""
         data = OpenAICompatibleBackend._load_planner_json(content)
         kind = str(data.get("kind", "text")).strip()
         text = str(data.get("text", "")).strip()
