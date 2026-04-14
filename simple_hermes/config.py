@@ -20,6 +20,7 @@ DEFAULT_CHILD_SAFE_TOOLS = {
     "read",
     "read_lines",
     "glob",
+    "project_overview",
     "diff",
     "search",
     "summarize",

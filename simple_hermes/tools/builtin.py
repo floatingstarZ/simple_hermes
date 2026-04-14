@@ -78,6 +78,7 @@ class BuiltInTools:
         self.registry.register("read_lines", "Read a numbered line range. Usage: read_lines <path> <start> <end>", self.read_lines)
         self.registry.register("tree", "Show a compact project tree for a path inside the project", self.tree)
         self.registry.register("glob", "Find project files by glob pattern, for example glob **/*.py", self.glob_files)
+        self.registry.register("project_overview", "Summarize project type, key files, and likely verification commands", self.project_overview)
         self.registry.register("diff", "Show git diff for the project or a project-relative path", self.diff)
         self.registry.register("terminal", "Run a guarded shell command in the project root", self.terminal)
         self.registry.register("run_tests", "Run Python unittest targets with a safer default command", self.run_tests)
@@ -355,6 +356,50 @@ class BuiltInTools:
         if not matches:
             return f"No files matched glob: {pattern}"
         return "Files:\n" + "\n".join(f"- {item}" for item in sorted(matches))
+
+    def project_overview(self, _: str) -> str:
+        markers = {
+            "pyproject.toml": "Python project",
+            "setup.py": "Python project",
+            "requirements.txt": "Python dependencies",
+            "package.json": "Node/JavaScript project",
+            "pnpm-lock.yaml": "pnpm lockfile",
+            "package-lock.json": "npm lockfile",
+            "yarn.lock": "Yarn lockfile",
+            "Cargo.toml": "Rust project",
+            "go.mod": "Go project",
+            "Makefile": "Makefile tasks",
+        }
+        found_markers = [f"- {name}: {label}" for name, label in markers.items() if (self.project_root / name).exists()]
+        py_files = list(self.project_root.glob("**/*.py"))[:200]
+        js_files = list(self.project_root.glob("**/*.js"))[:200]
+        ts_files = list(self.project_root.glob("**/*.ts"))[:200]
+        test_dirs = [str(path.relative_to(self.project_root)) for path in self.project_root.glob("**/tests") if path.is_dir()]
+
+        likely_commands: List[str] = []
+        if (self.project_root / "pyproject.toml").exists() or (self.project_root / "tests").is_dir():
+            likely_commands.append(f"{shlex.quote(sys.executable)} -m unittest discover -s tests -v")
+        if (self.project_root / "package.json").exists():
+            likely_commands.append("npm test")
+        if (self.project_root / "Cargo.toml").exists():
+            likely_commands.append("cargo test")
+        if (self.project_root / "go.mod").exists():
+            likely_commands.append("go test ./...")
+
+        lines = [
+            f"Project root: {self.project_root}",
+            "Detected markers:",
+            *(found_markers or ["- none"]),
+            "File counts:",
+            f"- Python: {len(py_files)}",
+            f"- JavaScript: {len(js_files)}",
+            f"- TypeScript: {len(ts_files)}",
+            "Test directories:",
+            *(f"- {item}" for item in (test_dirs[:10] or ["none"])),
+            "Likely verification commands:",
+            *(f"- {cmd}" for cmd in (likely_commands or ["inspect project files first"])),
+        ]
+        return "\n".join(lines)
 
     def diff(self, text: str) -> str:
         raw = text.strip()

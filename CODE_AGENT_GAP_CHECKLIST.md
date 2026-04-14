@@ -23,6 +23,7 @@ The fixture is a nested local git repo and is intentionally kept as a sandbox fo
 
 - `read_lines <path> <start> <end>` for precise code context.
 - `glob <pattern>` for project file discovery.
+- `project_overview` for project markers, file counts, and likely verification commands.
 - `diff [path]` for git diff inspection.
 - Prompt guidance that prefers project inspection, exact patch targets, diff inspection, and tests.
 - Local `.gitignore` for the main project and nested sandbox.

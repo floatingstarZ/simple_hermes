@@ -69,6 +69,7 @@ class BackendResponseParsingTests(unittest.TestCase):
         )
         self.assertIn("path ::: exact target text ::: replacement text", prompt)
         self.assertIn("read_lines", prompt)
+        self.assertIn("project_overview", prompt)
         self.assertIn("diff", prompt)
 
 

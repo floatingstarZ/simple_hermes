@@ -47,6 +47,7 @@ class ToolTests(unittest.TestCase):
         self.assertIn("patch_file", text)
         self.assertIn("read_lines", text)
         self.assertIn("glob", text)
+        self.assertIn("project_overview", text)
         self.assertIn("diff", text)
         self.assertIn("path ::: exact target", text)
 
@@ -140,6 +141,13 @@ class ToolTests(unittest.TestCase):
         (self.project_root / "src" / "module.py").write_text("print('ok')\n", encoding="utf-8")
         text = self.tools.glob_files("**/*.py")
         self.assertIn("src/module.py", text)
+
+    def test_project_overview_reports_markers_and_test_command(self) -> None:
+        (self.project_root / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+        text = self.tools.project_overview("")
+        self.assertIn("Python project", text)
+        self.assertIn("Likely verification commands:", text)
+        self.assertIn("-m unittest discover -s tests -v", text)
 
     def test_diff_shows_git_diff_when_project_is_git_repo(self) -> None:
         subprocess_env = os.environ.copy()

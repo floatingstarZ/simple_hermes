@@ -23,7 +23,7 @@ def build_planner_prompt(ctx: PromptContext) -> str:
         },
         "rules": [
             "Prefer a tool call when a tool clearly matches.",
-            "For coding tasks, inspect the project first with tree, glob, search, read, or read_lines before editing.",
+            "For coding tasks, inspect the project first with project_overview, tree, glob, search, read, or read_lines before editing.",
             "Use project-relative paths when calling file tools.",
             "If a file path is missing, use the suggested path or call tree/glob/search/terminal to locate it.",
             "Never repeat the same failed tool call with the same argument.",

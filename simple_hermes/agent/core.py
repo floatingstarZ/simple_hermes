@@ -214,6 +214,7 @@ class SimpleAgent:
             ("read ", "read"),
             ("tree", "tree"),
             ("glob ", "glob"),
+            ("project_overview", "project_overview"),
             ("diff", "diff"),
             ("terminal ", "terminal"),
             ("run_tests", "run_tests"),
@@ -241,7 +242,8 @@ class SimpleAgent:
             "I do not have a real LLM backend. Try one of the explicit commands: "
             "help, remember <text>, remember_user <text>, memories, user_memories, history, recall <query>, read <file>, tree [path] [depth], "
             "terminal <command>, run_tests [unittest args], write_file <path> <content>, "
-            "patch_file <path> ::: <target> ::: <replacement>, read_lines <path> <start> <end>, glob <pattern>, diff [path], search <query>, summarize"
+            "patch_file <path> ::: <target> ::: <replacement>, read_lines <path> <start> <end>, "
+            "glob <pattern>, project_overview, diff [path], search <query>, summarize"
         )
 
     def _backend_history_text(self, limit: int = 12) -> str:
