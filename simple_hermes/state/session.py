@@ -60,6 +60,14 @@ class SessionStore:
                 content,
                 content=''
             );
+
+            CREATE TABLE IF NOT EXISTS session_state (
+                session_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (session_id, key)
+            );
             """
         )
         self._ensure_column("messages", "kind", "TEXT")
@@ -217,6 +225,34 @@ class SessionStore:
         self.conn.execute(
             "INSERT INTO messages_fts (session_id, content) VALUES (?, ?)",
             (session_id, content),
+        )
+        self.conn.commit()
+
+    def set_state(self, session_id: str, key: str, value: str) -> None:
+        self.ensure_session(session_id)
+        self.conn.execute(
+            """
+            INSERT INTO session_state (session_id, key, value, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id, key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (session_id, key, value, time.time()),
+        )
+        self.conn.commit()
+
+    def get_state(self, session_id: str, key: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM session_state WHERE session_id = ? AND key = ?",
+            (session_id, key),
+        ).fetchone()
+        return str(row[0]) if row else None
+
+    def delete_state(self, session_id: str, key: str) -> None:
+        self.conn.execute(
+            "DELETE FROM session_state WHERE session_id = ? AND key = ?",
+            (session_id, key),
         )
         self.conn.commit()
 

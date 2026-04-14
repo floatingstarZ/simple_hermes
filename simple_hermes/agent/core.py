@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 import os
 import re
+import time
+import uuid
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,6 +22,7 @@ from simple_hermes.state.session import SessionStore
 from simple_hermes.tools.builtin import BuiltInTools
 
 INSPECTION_TOOLS = {"read", "read_lines", "tree", "glob", "project_overview", "search"}
+ACTIVE_TASK_STATE_KEY = "active_task"
 
 
 @dataclass
@@ -227,74 +231,80 @@ class SimpleAgent:
         )
         return any(hint in lower for hint in hints)
 
-    def _is_short_variant_followup(self, message: str) -> bool:
+    def _load_active_task(self) -> dict | None:
+        raw = self.sessions.get_state(self.session_id, ACTIVE_TASK_STATE_KEY)
+        if not raw:
+            return None
+        try:
+            task = json.loads(raw)
+        except json.JSONDecodeError:
+            self.sessions.delete_state(self.session_id, ACTIVE_TASK_STATE_KEY)
+            return None
+        return task if isinstance(task, dict) else None
+
+    def _save_active_task(self, task: dict) -> None:
+        task["updated_at"] = time.time()
+        self.sessions.set_state(self.session_id, ACTIVE_TASK_STATE_KEY, json.dumps(task, ensure_ascii=False))
+
+    def _start_active_task(self, message: str, category: str = "coding") -> dict:
+        task = {
+            "id": uuid.uuid4().hex[:12],
+            "category": category,
+            "goal": message.strip(),
+            "status": "in_progress",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "last_user_message": message.strip(),
+        }
+        self._save_active_task(task)
+        return task
+
+    def _set_active_task_status(self, status: str) -> None:
+        task = self._load_active_task()
+        if task is None:
+            return
+        task["status"] = status
+        self._save_active_task(task)
+
+    def _is_obviously_separate_message(self, message: str) -> bool:
         stripped = message.strip()
         lower = stripped.lower()
-        if len(stripped) > 80:
-            return False
-        variant_hints = (
-            "html",
-            "网页",
-            "web",
-            "js",
-            "javascript",
-            "python",
-            "pygame",
-            "终端",
-            "命令行",
-            "版本",
+        if not stripped:
+            return True
+        if self._plan_tool(stripped)[0] is not None:
+            return True
+        if lower in {"hi", "hello", "hey", "你好", "嗨", "thanks", "thank you", "谢谢", "多谢"}:
+            return True
+        if self._needs_code_change(stripped):
+            return True
+        if re.search(r"\b[\w./-]+\.(?:py|js|ts|tsx|jsx|md|json|toml|txt|html|css|yaml|yml)\b", stripped) and self._wants_file_explanation(stripped):
+            return True
+        return False
+
+    def _resolve_task_frame(self, message: str) -> tuple[str, dict | None, str | None]:
+        if self._needs_code_change(message):
+            task = self._start_active_task(message)
+            return message, task, "new_task"
+
+        task = self._load_active_task()
+        if task is None or task.get("category") != "coding":
+            return message, task, None
+        if task.get("status") not in {"in_progress", "awaiting_user"}:
+            return message, task, None
+        if self._is_obviously_separate_message(message):
+            return message, task, None
+
+        task["last_user_message"] = message.strip()
+        self._save_active_task(task)
+        expanded = (
+            "Continue the active coding task from session state.\n"
+            f"Active task id: {task.get('id')}\n"
+            f"Active task goal: {task.get('goal')}\n"
+            f"Current user follow-up: {message}\n"
+            "Treat the follow-up as additional constraints or permission for the active task. "
+            "Do not ask for more confirmation unless the task is truly impossible; inspect the project if needed, then create or edit the appropriate project file."
         )
-        return any(hint in lower for hint in variant_hints)
-
-    def _is_permission_followup(self, message: str) -> bool:
-        lower = message.strip().lower()
-        permission_hints = (
-            "任何操作都是允许",
-            "任何操作都允许",
-            "你做的任何操作",
-            "直接开始",
-            "直接做",
-            "不用问",
-            "不需要问",
-            "你决定",
-            "你来定",
-            "都可以",
-            "都行",
-            "放手做",
-            "go ahead",
-            "just do it",
-            "no need to ask",
-        )
-        return any(hint in lower for hint in permission_hints)
-
-    def _recent_user_code_request(self, history: List[dict]) -> str | None:
-        for row in reversed(history):
-            if row.get("role") != "user":
-                continue
-            content = row.get("content", "").strip()
-            if content and self._needs_code_change(content):
-                return content
-        return None
-
-    def _expand_followup_message(self, message: str, prior_history: List[dict]) -> str:
-        previous_request = self._recent_user_code_request(prior_history)
-        if previous_request is None:
-            return message
-        if self._is_short_variant_followup(message):
-            return (
-                "Continue the previous coding request using the user's selected variant.\n"
-                f"Previous request: {previous_request}\n"
-                f"Current follow-up: {message}\n"
-                "Do not ask for more confirmation. Inspect the project if needed, then create or edit the appropriate project file."
-            )
-        if self._is_permission_followup(message):
-            return (
-                "Continue and execute the previous coding request now. The user has explicitly allowed the needed operations.\n"
-                f"Previous request: {previous_request}\n"
-                f"Current follow-up permission: {message}\n"
-                "Do not answer with a permission/status-only message. Inspect the project if needed, then create or edit the appropriate project file."
-            )
-        return message
+        return expanded, task, "continued_task"
 
     def _needs_test(self, message: str) -> bool:
         lower = message.lower()
@@ -843,11 +853,12 @@ class SimpleAgent:
 
     def run(self, message: str) -> AgentResponse:
         trace: List[AgentTraceStep] = []
-        prior_history = self.sessions.history(session_id=self.session_id, limit=20)
-        original_message = self._expand_followup_message(message, prior_history)
+        original_message, active_task, task_event = self._resolve_task_frame(message)
         self.sessions.append("user", message, session_id=self.session_id, kind="user_message")
         if original_message != message:
-            trace.append(AgentTraceStep(step=0, kind="followup_expanded", content=original_message))
+            trace.append(AgentTraceStep(step=0, kind="task_frame_resolved", content=original_message))
+        elif task_event == "new_task" and active_task is not None:
+            trace.append(AgentTraceStep(step=0, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
 
         if self.backend is not None and self._wants_passive_project_diagnosis(original_message):
             return self._run_passive_project_diagnosis(original_message)
@@ -899,6 +910,7 @@ class SimpleAgent:
             trace.append(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
             if decision.tool_call is None:
                 if self._needs_code_change(original_message) and not successful_edit:
+                    self._set_active_task_status("in_progress")
                     recovery_message = self._premature_text_message(original_message, decision.text, run_observations)
                     trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
@@ -908,6 +920,8 @@ class SimpleAgent:
                     trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
+                if successful_edit:
+                    self._set_active_task_status("completed")
                 self._record_assistant_text(decision.text)
                 self._maybe_compress_history()
                 return AgentResponse(final_response=decision.text, tool_used=last_tool_used, steps=step, trace=trace)

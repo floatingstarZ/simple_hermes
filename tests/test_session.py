@@ -35,6 +35,14 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(row["kind"], "tool_result")
         self.assertEqual(row["tool_name"], "read")
 
+    def test_session_state_round_trips_structured_agent_state(self) -> None:
+        self.store.set_state("default", "active_task", '{"goal": "write snake"}')
+        self.assertEqual(self.store.get_state("default", "active_task"), '{"goal": "write snake"}')
+        self.store.set_state("default", "active_task", '{"goal": "write html snake"}')
+        self.assertEqual(self.store.get_state("default", "active_task"), '{"goal": "write html snake"}')
+        self.store.delete_state("default", "active_task")
+        self.assertIsNone(self.store.get_state("default", "active_task"))
+
     def test_can_create_child_session_with_parent_lineage(self) -> None:
         child_id = self.store.create_child_session("default", title="child task")
         children = self.store.child_sessions("default")
