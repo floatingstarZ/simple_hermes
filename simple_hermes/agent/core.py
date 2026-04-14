@@ -309,6 +309,24 @@ class SimpleAgent:
             return preview[:limit] + "..."
         return preview
 
+    def _truncate_block(self, content: str, limit: int = 1200) -> str:
+        content = content.strip()
+        if len(content) > limit:
+            return content[:limit] + "\n...[truncated]"
+        return content
+
+    def _backend_unavailable_fallback_text(self, error: Exception) -> str:
+        memory_block = self.memory.as_prompt_block().strip() or "No durable/user memories saved."
+        history_text = self._backend_history_text(limit=8).strip() or "No recent session history."
+        return (
+            "Backend planning failed before any tool ran, so I fell back to local session context.\n\n"
+            f"Error: {error}\n\n"
+            "Local memories:\n"
+            f"{self._truncate_block(memory_block)}\n\n"
+            "Recent session context:\n"
+            f"{self._truncate_block(history_text)}"
+        )
+
     def _unique_nonempty(self, items: List[str], limit: int) -> List[str]:
         seen = set()
         out = []
@@ -781,10 +799,11 @@ class SimpleAgent:
                     self._maybe_compress_history()
                     return AgentResponse(final_response=fallback_text, tool_used=last_tool_used, steps=step, trace=trace)
                 error_text = f"Backend planning failed: {e}"
-                self._record_assistant_text(error_text)
-                emit(AgentTraceStep(step=step, kind="backend_error", content=error_text))
+                fallback_text = self._backend_unavailable_fallback_text(e)
+                self._record_assistant_text(fallback_text)
+                emit(AgentTraceStep(step=step, kind="backend_error_fallback", content=error_text))
                 self._maybe_compress_history()
-                return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                return AgentResponse(final_response=fallback_text, tool_used=last_tool_used, steps=step, trace=trace)
             requires_edit = requires_edit or decision.requires_edit
             requires_test = requires_test or decision.requires_test
             if requires_edit and active_task is None:

@@ -842,15 +842,22 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("Active task id: task1", backend.calls[0]["message"])
         self.assertTrue(any(step.kind == "task_frame_resolved" for step in result.trace))
 
-    def test_backend_failure_becomes_agent_error_response(self) -> None:
+    def test_backend_failure_falls_back_to_local_context(self) -> None:
         agent = self._make_agent(
             project_root=self.project_root,
             base_dir=Path(self.temp_dir.name) / "state6",
             backend=ErrorBackend(),
         )
-        result = agent.run("hi there")
+        agent.memory.add_user("user prefers concise Chinese answers")
+
+        result = agent.run("你记得我的历史消息吗？我的个人偏好")
+
+        self.assertIn("Backend planning failed before any tool ran", result.final_response)
         self.assertIn("backend exploded", result.final_response)
-        self.assertIn("error", result.trace[-1].kind)
+        self.assertIn("Known user preferences", result.final_response)
+        self.assertIn("user prefers concise Chinese answers", result.final_response)
+        self.assertIn("你记得我的历史消息吗？我的个人偏好", result.final_response)
+        self.assertEqual(result.trace[-1].kind, "backend_error_fallback")
 
     def test_backend_failure_after_tool_returns_tool_result(self) -> None:
         agent = self._make_agent(
