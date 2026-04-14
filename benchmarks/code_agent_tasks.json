@@ -18,6 +18,19 @@
     "expected_files": ["todo_app/core.py", "tests/test_todo.py"]
   },
   {
+    "id": "todo-active-items-multiturn",
+    "name": "Todo active-items multi-turn diagnosis and repair",
+    "category": "python_multiturn_business_logic_bugfix",
+    "template": "fixtures/todo_cli_sandbox_template",
+    "turns": [
+      "先看这个 todo 项目，告诉我 active_items 当前逻辑和测试期待。只做诊断结论。",
+      "那就修复 active_items。",
+      "跑测试并总结结果。"
+    ],
+    "test_command": "python3 -m unittest discover -s tests -v",
+    "expected_files": ["todo_app/core.py", "tests/test_todo.py"]
+  },
+  {
     "id": "invoice-discount",
     "name": "Invoice discount multi-file change",
     "category": "python_multifile_feature",

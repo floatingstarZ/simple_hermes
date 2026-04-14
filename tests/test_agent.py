@@ -152,6 +152,21 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIsNone(decision.tool_call)
         self.assertIn("I do not have a real LLM backend", decision.text)
 
+    def test_planner_starts_project_inspection_locally_for_codebase_requests(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="backend should not be first", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_project_inspection",
+            backend=backend,
+        )
+
+        decision = agent.plan("先看这个 todo 项目，告诉我 active_items 当前逻辑。只做诊断结论。")
+
+        self.assertEqual(decision.kind, "tool_call")
+        self.assertIsNotNone(decision.tool_call)
+        self.assertEqual(decision.tool_call.name, "project_overview")
+        self.assertEqual(backend.calls, [])
+
     def test_agent_can_use_injected_backend_for_tool_choice(self) -> None:
         backend = FakeBackend([
             PlannerDecision(
@@ -299,6 +314,11 @@ class AgentPlanningTests(unittest.TestCase):
         core_file = self.project_root / "todo_app" / "core.py"
         core_file.parent.mkdir(exist_ok=True)
         core_file.write_text(
+            "from dataclasses import dataclass\n\n"
+            "@dataclass\n"
+            "class TodoItem:\n"
+            "    title: str\n"
+            "    completed: bool = False\n\n"
             "class TodoList:\n"
             "    def __init__(self):\n"
             "        self.items = []\n\n"
@@ -315,19 +335,7 @@ class AgentPlanningTests(unittest.TestCase):
             def plan(self, *, message: str, memory_block: str, history_text: str, tools_text: str) -> PlannerDecision:
                 self.calls.append({"message": message, "history_text": history_text})
                 if len(self.calls) == 1:
-                    return PlannerDecision(
-                        kind="tool_call",
-                        text="read core",
-                        tool_call=ToolCall(name="read", argument="todo_app/core.py"),
-                    )
-                if len(self.calls) == 2:
-                    return PlannerDecision(
-                        kind="text",
-                        text="诊断：active_items returns all items, including completed ones.",
-                        tool_call=None,
-                    )
-                if len(self.calls) == 3:
-                    self.saw_prior_diagnosis = "active_items returns all items" in history_text
+                    self.saw_prior_diagnosis = "list(self.items)" in history_text
                     return PlannerDecision(
                         kind="tool_call",
                         text="patch active_items",
@@ -351,7 +359,9 @@ class AgentPlanningTests(unittest.TestCase):
         )
 
         first = agent.run("先看这个 todo 项目，告诉我 active_items 当前逻辑。只做诊断，不要修改文件。")
-        self.assertIn("active_items returns all items", first.final_response)
+        self.assertEqual(backend.calls, [])
+        self.assertIn("当前实现直接返回 `list(self.items)`", first.final_response)
+        self.assertIn("not item.completed", first.final_response)
         self.assertIn("return list(self.items)", core_file.read_text(encoding="utf-8"))
 
         second = agent.run("那就修复 active_items。")

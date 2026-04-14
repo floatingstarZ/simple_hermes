@@ -47,6 +47,7 @@ The fixture is a nested local git repo and is intentionally kept as a sandbox fo
 - `patch_file` reports nearest matching snippets when exact replacement text is missing.
 - A multi-file Python invoice benchmark now checks calculation and reporting edits plus no-discount compatibility.
 - The benchmark runner records timed-out agent/test commands instead of crashing and runs agents with unbuffered trace output plus `SIMPLE_HERMES_MAX_STEPS=300`.
+- The benchmark runner supports multi-turn tasks through a `turns` array, with a todo diagnose -> repair -> verify scenario.
 
 ## Next Pass Candidates
 

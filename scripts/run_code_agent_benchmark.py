@@ -99,10 +99,13 @@ def agent_env(task_dir: Path, session_id: str) -> dict[str, str]:
 
 
 def run_agent(task: dict[str, Any], task_dir: Path, trace_path: Path, timeout: int) -> CommandResult:
-    prompt = str(task["prompt"])
+    if isinstance(task.get("turns"), list):
+        turns = [str(turn) for turn in task["turns"]]
+    else:
+        turns = [str(task["prompt"])]
     session_id = f"bench-{task['id']}-{int(time.time())}"
     env = agent_env(task_dir, session_id)
-    input_text = f"{prompt}\n/trace\nexit\n"
+    input_text = "\n".join([*turns, "/trace", "exit", ""])
     command = ["simple_hermes_codex"]
     started = time.time()
     with trace_path.open("w", encoding="utf-8") as trace_file:
@@ -165,6 +168,7 @@ def run_one_task(task: dict[str, Any], output_dir: Path, run_agent_flag: bool, t
         "workspace": str(task_dir),
         "expected_initial_failure": ready,
         "passed": passed,
+        "turn_count": len(task["turns"]) if isinstance(task.get("turns"), list) else 1,
         "initial_test": initial_test.as_dict(),
         "agent": None if agent_result is None else agent_result.as_dict(),
         "final_test": final_test.as_dict(),
