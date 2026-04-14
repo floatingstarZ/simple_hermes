@@ -1,0 +1,38 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"id":"t1","type":"text","x":60,"y":40,"width":760,"height":32,"text":"Simple Hermes 架构图","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","originalText":"Simple Hermes 架构图","autoResize":true},
+    {"id":"t2","type":"text","x":60,"y":78,"width":1040,"height":22,"text":"这是一个教学版的最小 Agent 系统：CLI 是外壳，SimpleAgent 是大脑，Tools/Memory/Session 是三块核心基础设施","fontSize":18,"fontFamily":1,"strokeColor":"#475569","originalText":"这是一个教学版的最小 Agent 系统：CLI 是外壳，SimpleAgent 是大脑，Tools/Memory/Session 是三块核心基础设施","autoResize":true},
+
+    {"id":"r1","type":"rectangle","x":90,"y":170,"width":250,"height":110,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","boundElements":[{"id":"r1t","type":"text"}]},
+    {"id":"r1t","type":"text","x":125,"y":202,"width":180,"height":46,"text":"CLI\n用户输入与输出界面","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r1","originalText":"CLI\n用户输入与输出界面","autoResize":true},
+
+    {"id":"r2","type":"ellipse","x":430,"y":150,"width":320,"height":150,"backgroundColor":"#c3fae8","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r2t","type":"text"}]},
+    {"id":"r2t","type":"text","x":500,"y":196,"width":180,"height":58,"text":"SimpleAgent\n最小 agent loop\n规则式 planner","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r2","originalText":"SimpleAgent\n最小 agent loop\n规则式 planner","autoResize":true},
+
+    {"id":"r3","type":"rectangle","x":860,"y":170,"width":260,"height":110,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","boundElements":[{"id":"r3t","type":"text"}]},
+    {"id":"r3t","type":"text","x":895,"y":202,"width":190,"height":46,"text":"ToolRegistry\n统一注册与分发工具","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r3","originalText":"ToolRegistry\n统一注册与分发工具","autoResize":true},
+
+    {"id":"a1","type":"arrow","x":340,"y":225,"width":90,"height":0,"points":[[0,0],[90,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a2","type":"arrow","x":750,"y":225,"width":110,"height":0,"points":[[0,0],[110,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+
+    {"id":"r4","type":"rectangle","x":120,"y":420,"width":260,"height":150,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","boundElements":[{"id":"r4t","type":"text"}]},
+    {"id":"r4t","type":"text","x":155,"y":464,"width":190,"height":62,"text":"MemoryStore\nGeneral Memory\nUser Memory","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r4","originalText":"MemoryStore\nGeneral Memory\nUser Memory","autoResize":true},
+
+    {"id":"r5","type":"rectangle","x":460,"y":420,"width":260,"height":150,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","boundElements":[{"id":"r5t","type":"text"}]},
+    {"id":"r5t","type":"text","x":495,"y":464,"width":190,"height":62,"text":"SessionStore\nSQLite 历史记录\nappend / history / search","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r5","originalText":"SessionStore\nSQLite 历史记录\nappend / history / search","autoResize":true},
+
+    {"id":"r6","type":"rectangle","x":800,"y":420,"width":320,"height":150,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","boundElements":[{"id":"r6t","type":"text"}]},
+    {"id":"r6t","type":"text","x":840,"y":464,"width":240,"height":62,"text":"Built-in Tools\nremember / remember_user / read / search / recall / summarize","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r6","originalText":"Built-in Tools\nremember / remember_user / read / search / recall / summarize","autoResize":true},
+
+    {"id":"a3","type":"arrow","x":560,"y":300,"width":-250,"height":120,"points":[[0,0],[-250,120]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a4","type":"arrow","x":590,"y":300,"width":0,"height":120,"points":[[0,0],[0,120]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a5","type":"arrow","x":620,"y":300,"width":250,"height":120,"points":[[0,0],[250,120]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+
+    {"id":"n","type":"rectangle","x":170,"y":680,"width":920,"height":100,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","boundElements":[{"id":"nt","type":"text"}]},
+    {"id":"nt","type":"text","x":220,"y":712,"width":820,"height":36,"text":"教学重点：它保留了 Hermes 最重要的教学骨架——Agent、Registry、Memory、Session、CLI——但故意去掉了生产级复杂度","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"n","originalText":"教学重点：它保留了 Hermes 最重要的教学骨架——Agent、Registry、Memory、Session、CLI——但故意去掉了生产级复杂度","autoResize":true}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff"}
+}

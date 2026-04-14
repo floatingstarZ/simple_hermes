@@ -1,0 +1,29 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"id":"t1","type":"text","x":60,"y":40,"width":880,"height":32,"text":"Simple Hermes Backend 模式图","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","originalText":"Simple Hermes Backend 模式图","autoResize":true},
+    {"id":"t2","type":"text","x":60,"y":78,"width":1120,"height":22,"text":"同一个 SimpleAgent 支持三种 planner 模式：纯教学规则模式、直接 OpenAI-compatible 模式、复用 Hermes runtime/auth 的桥接模式","fontSize":18,"fontFamily":1,"strokeColor":"#475569","originalText":"同一个 SimpleAgent 支持三种 planner 模式：纯教学规则模式、直接 OpenAI-compatible 模式、复用 Hermes runtime/auth 的桥接模式","autoResize":true},
+
+    {"id":"r1","type":"rectangle","x":90,"y":170,"width":300,"height":180,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","boundElements":[{"id":"r1t","type":"text"}]},
+    {"id":"r1t","type":"text","x":130,"y":220,"width":220,"height":80,"text":"Mode 1\nrule-based\n\n无模型依赖\n最适合教学","fontSize":26,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r1","originalText":"Mode 1\nrule-based\n\n无模型依赖\n最适合教学","autoResize":true},
+
+    {"id":"r2","type":"rectangle","x":450,"y":170,"width":320,"height":180,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","boundElements":[{"id":"r2t","type":"text"}]},
+    {"id":"r2t","type":"text","x":490,"y":220,"width":240,"height":80,"text":"Mode 2\nopenai-compatible\n\n手动提供 base_url/api_key/model\n直接调用后端 planning","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r2","originalText":"Mode 2\nopenai-compatible\n\n手动提供 base_url/api_key/model\n直接调用后端 planning","autoResize":true},
+
+    {"id":"r3","type":"rectangle","x":830,"y":170,"width":320,"height":180,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","boundElements":[{"id":"r3t","type":"text"}]},
+    {"id":"r3t","type":"text","x":870,"y":220,"width":240,"height":80,"text":"Mode 3\nhermes-runtime bridge\n\n复用 Hermes 的 runtime/auth/provider 解析\n可借原 Hermes 登录与配置","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r3","originalText":"Mode 3\nhermes-runtime bridge\n\n复用 Hermes 的 runtime/auth/provider 解析\n可借原 Hermes 登录与配置","autoResize":true},
+
+    {"id":"core","type":"ellipse","x":360,"y":470,"width":520,"height":170,"backgroundColor":"#fff3bf","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"coret","type":"text"}]},
+    {"id":"coret","type":"text","x":430,"y":525,"width":380,"height":60,"text":"SimpleAgent\n显式命令优先本地工具\n非显式输入才交给 backend planning","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"core","originalText":"SimpleAgent\n显式命令优先本地工具\n非显式输入才交给 backend planning","autoResize":true},
+
+    {"id":"a1","type":"arrow","x":240,"y":350,"width":240,"height":140,"points":[[0,0],[240,140]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a2","type":"arrow","x":610,"y":350,"width":0,"height":120,"points":[[0,0],[0,120]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a3","type":"arrow","x":990,"y":350,"width":-240,"height":140,"points":[[0,0],[-240,140]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+
+    {"id":"n","type":"rectangle","x":150,"y":740,"width":940,"height":100,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","boundElements":[{"id":"nt","type":"text"}]},
+    {"id":"nt","type":"text","x":200,"y":772,"width":840,"height":36,"text":"设计原则：教学可预测性优先——显式命令不交给模型；但在需要时，Agent 又可以接入真实 LLM backend 成为真正可用的轻量 Agent","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"n","originalText":"设计原则：教学可预测性优先——显式命令不交给模型；但在需要时，Agent 又可以接入真实 LLM backend 成为真正可用的轻量 Agent","autoResize":true}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff"}
+}

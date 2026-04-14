@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+.env.*
+traces/
+
+# The sandbox is a nested local repo used by code-agent integration tests.
+fixtures/code_agent_sandbox/.git/
+fixtures/code_agent_sandbox/__pycache__/
+fixtures/code_agent_sandbox/**/__pycache__/
+fixtures/code_agent_sandbox/traces/
+fixtures/code_agent_sandbox/.hermes_traces/

@@ -1,0 +1,57 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"id":"title","type":"text","x":60,"y":40,"width":860,"height":32,"text":"Simple Hermes 请求时序图","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","originalText":"Simple Hermes 请求时序图","autoResize":true},
+    {"id":"sub","type":"text","x":60,"y":78,"width":1040,"height":22,"text":"展示教学版最小 agent 的运行流程：CLI -> SimpleAgent -> PlannerDecision -> ToolRegistry -> Tool Handler -> SessionStore","fontSize":18,"fontFamily":1,"strokeColor":"#475569","originalText":"展示教学版最小 agent 的运行流程：CLI -> SimpleAgent -> PlannerDecision -> ToolRegistry -> Tool Handler -> SessionStore","autoResize":true},
+
+    {"id":"a1","type":"rectangle","x":70,"y":130,"width":150,"height":60,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","boundElements":[{"id":"a1t","type":"text"}]},
+    {"id":"a1t","type":"text","x":113,"y":148,"width":64,"height":24,"text":"User","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a1","originalText":"User","autoResize":true},
+    {"id":"a2","type":"rectangle","x":280,"y":130,"width":150,"height":60,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","boundElements":[{"id":"a2t","type":"text"}]},
+    {"id":"a2t","type":"text","x":328,"y":148,"width":54,"height":24,"text":"CLI","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a2","originalText":"CLI","autoResize":true},
+    {"id":"a3","type":"rectangle","x":490,"y":130,"width":180,"height":60,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","boundElements":[{"id":"a3t","type":"text"}]},
+    {"id":"a3t","type":"text","x":535,"y":148,"width":90,"height":24,"text":"SimpleAgent","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a3","originalText":"SimpleAgent","autoResize":true},
+    {"id":"a4","type":"rectangle","x":730,"y":130,"width":190,"height":60,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","boundElements":[{"id":"a4t","type":"text"}]},
+    {"id":"a4t","type":"text","x":759,"y":148,"width":132,"height":24,"text":"ToolRegistry/Tools","fontSize":18,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a4","originalText":"ToolRegistry/Tools","autoResize":true},
+    {"id":"a5","type":"rectangle","x":980,"y":130,"width":180,"height":60,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","boundElements":[{"id":"a5t","type":"text"}]},
+    {"id":"a5t","type":"text","x":1028,"y":148,"width":84,"height":24,"text":"SessionStore","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a5","originalText":"SessionStore","autoResize":true},
+
+    {"id":"l1","type":"line","x":145,"y":210,"width":0,"height":700,"points":[[0,0],[0,700]],"strokeColor":"#94a3b8","strokeWidth":2,"strokeStyle":"dashed","roughness":0},
+    {"id":"l2","type":"line","x":355,"y":210,"width":0,"height":700,"points":[[0,0],[0,700]],"strokeColor":"#94a3b8","strokeWidth":2,"strokeStyle":"dashed","roughness":0},
+    {"id":"l3","type":"line","x":580,"y":210,"width":0,"height":700,"points":[[0,0],[0,700]],"strokeColor":"#94a3b8","strokeWidth":2,"strokeStyle":"dashed","roughness":0},
+    {"id":"l4","type":"line","x":825,"y":210,"width":0,"height":700,"points":[[0,0],[0,700]],"strokeColor":"#94a3b8","strokeWidth":2,"strokeStyle":"dashed","roughness":0},
+    {"id":"l5","type":"line","x":1070,"y":210,"width":0,"height":700,"points":[[0,0],[0,700]],"strokeColor":"#94a3b8","strokeWidth":2,"strokeStyle":"dashed","roughness":0},
+
+    {"id":"m1","type":"arrow","x":145,"y":250,"width":210,"height":0,"points":[[0,0],[210,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m1t","type":"text"}]},
+    {"id":"m1t","type":"text","x":206,"y":226,"width":88,"height":20,"text":"输入命令","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m1","originalText":"输入命令","autoResize":true},
+
+    {"id":"m2","type":"arrow","x":355,"y":320,"width":225,"height":0,"points":[[0,0],[225,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m2t","type":"text"}]},
+    {"id":"m2t","type":"text","x":409,"y":296,"width":117,"height":20,"text":"agent.run(message)","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m2","originalText":"agent.run(message)","autoResize":true},
+
+    {"id":"m3","type":"arrow","x":580,"y":390,"width":490,"height":0,"points":[[0,0],[490,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m3t","type":"text"}]},
+    {"id":"m3t","type":"text","x":751,"y":366,"width":148,"height":20,"text":"先保存 user message","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m3","originalText":"先保存 user message","autoResize":true},
+
+    {"id":"m4","type":"arrow","x":1070,"y":450,"width":-490,"height":0,"points":[[0,0],[-490,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m4t","type":"text"}]},
+    {"id":"m4t","type":"text","x":810,"y":426,"width":30,"height":20,"text":"OK","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m4","originalText":"OK","autoResize":true},
+
+    {"id":"m5","type":"arrow","x":580,"y":520,"width":0,"height":0,"points":[[0,0],[0,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m5t","type":"text"}]},
+    {"id":"m5t","type":"text","x":492,"y":496,"width":176,"height":20,"text":"plan() -> PlannerDecision","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m5","originalText":"plan() -> PlannerDecision","autoResize":true},
+
+    {"id":"m6","type":"arrow","x":580,"y":600,"width":245,"height":0,"points":[[0,0],[245,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m6t","type":"text"}]},
+    {"id":"m6t","type":"text","x":637,"y":576,"width":131,"height":20,"text":"registry.run(tool,arg)","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m6","originalText":"registry.run(tool,arg)","autoResize":true},
+
+    {"id":"m7","type":"arrow","x":825,"y":660,"width":-245,"height":0,"points":[[0,0],[-245,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m7t","type":"text"}]},
+    {"id":"m7t","type":"text","x":674,"y":636,"width":57,"height":20,"text":"tool result","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m7","originalText":"tool result","autoResize":true},
+
+    {"id":"m8","type":"arrow","x":580,"y":740,"width":490,"height":0,"points":[[0,0],[490,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m8t","type":"text"}]},
+    {"id":"m8t","type":"text","x":748,"y":716,"width":154,"height":20,"text":"保存 assistant message","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m8","originalText":"保存 assistant message","autoResize":true},
+
+    {"id":"m9","type":"arrow","x":580,"y":820,"width":-225,"height":0,"points":[[0,0],[-225,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m9t","type":"text"}]},
+    {"id":"m9t","type":"text","x":450,"y":796,"width":85,"height":20,"text":"final_response","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m9","originalText":"final_response","autoResize":true},
+
+    {"id":"m10","type":"arrow","x":355,"y":880,"width":-210,"height":0,"points":[[0,0],[-210,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e","boundElements":[{"id":"m10t","type":"text"}]},
+    {"id":"m10t","type":"text","x":216,"y":856,"width":68,"height":20,"text":"打印结果","fontSize":16,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"m10","originalText":"打印结果","autoResize":true}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff"}
+}

@@ -1,0 +1,43 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "hermes-agent",
+  "elements": [
+    {"id":"t1","type":"text","x":60,"y":40,"width":940,"height":32,"text":"Simple Hermes vs Full Hermes 对照图","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","originalText":"Simple Hermes vs Full Hermes 对照图","autoResize":true},
+    {"id":"t2","type":"text","x":60,"y":78,"width":1060,"height":22,"text":"左边是教学版最小工程，右边是真正的平台级 Hermes；目标不是替代，而是帮助理解层级差异","fontSize":18,"fontFamily":1,"strokeColor":"#475569","originalText":"左边是教学版最小工程，右边是真正的平台级 Hermes；目标不是替代，而是帮助理解层级差异","autoResize":true},
+
+    {"id":"l1","type":"rectangle","x":70,"y":150,"width":500,"height":760,"roundness":{"type":3},"backgroundColor":"#e0f2fe","fillStyle":"solid","boundElements":[{"id":"l1t","type":"text"}]},
+    {"id":"l1t","type":"text","x":220,"y":166,"width":200,"height":28,"text":"Simple Hermes","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"l1","originalText":"Simple Hermes","autoResize":true},
+
+    {"id":"r1","type":"rectangle","x":630,"y":150,"width":500,"height":760,"roundness":{"type":3},"backgroundColor":"#f3e8ff","fillStyle":"solid","boundElements":[{"id":"r1t","type":"text"}]},
+    {"id":"r1t","type":"text","x":790,"y":166,"width":180,"height":28,"text":"Full Hermes","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r1","originalText":"Full Hermes","autoResize":true},
+
+    {"id":"a1","type":"rectangle","x":110,"y":230,"width":420,"height":110,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","boundElements":[{"id":"a1t","type":"text"}]},
+    {"id":"a1t","type":"text","x":155,"y":260,"width":330,"height":50,"text":"SimpleAgent\n规则式最小 agent loop","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a1","originalText":"SimpleAgent\n规则式最小 agent loop","autoResize":true},
+
+    {"id":"a2","type":"rectangle","x":670,"y":230,"width":420,"height":110,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","boundElements":[{"id":"a2t","type":"text"}]},
+    {"id":"a2t","type":"text","x":715,"y":260,"width":330,"height":50,"text":"AIAgent\n真实多 provider、多工具、多恢复链执行核心","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"a2","originalText":"AIAgent\n真实多 provider、多工具、多恢复链执行核心","autoResize":true},
+
+    {"id":"b1","type":"rectangle","x":110,"y":380,"width":420,"height":100,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","boundElements":[{"id":"b1t","type":"text"}]},
+    {"id":"b1t","type":"text","x":150,"y":410,"width":340,"height":40,"text":"ToolRegistry + Built-in Tools\n最小工具平台","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"b1","originalText":"ToolRegistry + Built-in Tools\n最小工具平台","autoResize":true},
+
+    {"id":"b2","type":"rectangle","x":670,"y":380,"width":420,"height":100,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","boundElements":[{"id":"b2t","type":"text"}]},
+    {"id":"b2t","type":"text","x":700,"y":410,"width":360,"height":40,"text":"registry + toolsets + dozens of tools + MCP + plugins\n平台级能力平面","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"b2","originalText":"registry + toolsets + dozens of tools + MCP + plugins\n平台级能力平面","autoResize":true},
+
+    {"id":"c1","type":"rectangle","x":110,"y":520,"width":420,"height":100,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","boundElements":[{"id":"c1t","type":"text"}]},
+    {"id":"c1t","type":"text","x":150,"y":550,"width":340,"height":40,"text":"Split Memory + SQLite Session History\n最小 continuity","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"c1","originalText":"Split Memory + SQLite Session History\n最小 continuity","autoResize":true},
+
+    {"id":"c2","type":"rectangle","x":670,"y":520,"width":420,"height":100,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","boundElements":[{"id":"c2t","type":"text"}]},
+    {"id":"c2t","type":"text","x":710,"y":550,"width":340,"height":40,"text":"Memory + SessionDB + Session Search + Compression + Lineage\n长期运行基础设施","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"c2","originalText":"Memory + SessionDB + Session Search + Compression + Lineage\n长期运行基础设施","autoResize":true},
+
+    {"id":"d1","type":"rectangle","x":110,"y":660,"width":420,"height":100,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","boundElements":[{"id":"d1t","type":"text"}]},
+    {"id":"d1t","type":"text","x":150,"y":690,"width":340,"height":40,"text":"单一 CLI surface\n适合教学和实验","fontSize":24,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"d1","originalText":"单一 CLI surface\n适合教学和实验","autoResize":true},
+
+    {"id":"d2","type":"rectangle","x":670,"y":660,"width":420,"height":100,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","boundElements":[{"id":"d2t","type":"text"}]},
+    {"id":"d2t","type":"text","x":710,"y":690,"width":340,"height":40,"text":"CLI + Gateway + ACP + Cron + Messaging\n多表面平台","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"d2","originalText":"CLI + Gateway + ACP + Cron + Messaging\n多表面平台","autoResize":true},
+
+    {"id":"e1","type":"rectangle","x":250,"y":810,"width":700,"height":70,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","boundElements":[{"id":"e1t","type":"text"}]},
+    {"id":"e1t","type":"text","x":300,"y":832,"width":600,"height":26,"text":"结论：Simple Hermes 用来学骨架；Full Hermes 用来承载真实、长期、复杂、多入口的 Agent 系统","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"e1","originalText":"结论：Simple Hermes 用来学骨架；Full Hermes 用来承载真实、长期、复杂、多入口的 Agent 系统","autoResize":true}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff"}
+}

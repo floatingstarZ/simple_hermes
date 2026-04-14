@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="990" viewBox="0 0 1240 990">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#1e1e1e"/>
+</marker>
+<style>text { font-family: Inter, PingFang SC, Microsoft YaHei, sans-serif; fill: #1e1e1e; }</style>
+</defs>
+<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>
+<text x="60" y="68" font-size="28" fill="#1e1e1e">
+<tspan x="60" dy="0">Simple Hermes 请求时序图</tspan>
+</text>
+<text x="60" y="96" font-size="18" fill="#475569">
+<tspan x="60" dy="0">展示教学版最小 agent 的运行流程：CLI -&gt; SimpleAgent -&gt; PlannerDecision -&gt; ToolRegistry -&gt; Tool Handler -&gt; SessionStore</tspan>
+</text>
+<rect x="70" y="130" width="150" height="60" rx="18" ry="18" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="113" y="170" font-size="22" fill="#1e1e1e">
+<tspan x="113" dy="0">User</tspan>
+</text>
+<rect x="280" y="130" width="150" height="60" rx="18" ry="18" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="328" y="170" font-size="22" fill="#1e1e1e">
+<tspan x="328" dy="0">CLI</tspan>
+</text>
+<rect x="490" y="130" width="180" height="60" rx="18" ry="18" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="535" y="168" font-size="20" fill="#1e1e1e">
+<tspan x="535" dy="0">SimpleAgent</tspan>
+</text>
+<rect x="730" y="130" width="190" height="60" rx="18" ry="18" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="759" y="166" font-size="18" fill="#1e1e1e">
+<tspan x="759" dy="0">ToolRegistry/Tools</tspan>
+</text>
+<rect x="980" y="130" width="180" height="60" rx="18" ry="18" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="1028" y="168" font-size="20" fill="#1e1e1e">
+<tspan x="1028" dy="0">SessionStore</tspan>
+</text>
+<polyline points="145,210 145,910" fill="none" stroke="#94a3b8" stroke-width="2"/>
+<polyline points="355,210 355,910" fill="none" stroke="#94a3b8" stroke-width="2"/>
+<polyline points="580,210 580,910" fill="none" stroke="#94a3b8" stroke-width="2"/>
+<polyline points="825,210 825,910" fill="none" stroke="#94a3b8" stroke-width="2"/>
+<polyline points="1070,210 1070,910" fill="none" stroke="#94a3b8" stroke-width="2"/>
+<polyline points="145,250 355,250" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="206" y="242" font-size="16" fill="#1e1e1e">
+<tspan x="206" dy="0">输入命令</tspan>
+</text>
+<polyline points="355,320 580,320" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="409" y="312" font-size="16" fill="#1e1e1e">
+<tspan x="409" dy="0">agent.run(message)</tspan>
+</text>
+<polyline points="580,390 1070,390" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="751" y="382" font-size="16" fill="#1e1e1e">
+<tspan x="751" dy="0">先保存 user message</tspan>
+</text>
+<polyline points="1070,450 580,450" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="810" y="442" font-size="16" fill="#1e1e1e">
+<tspan x="810" dy="0">OK</tspan>
+</text>
+<polyline points="580,520 580,520" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="492" y="512" font-size="16" fill="#1e1e1e">
+<tspan x="492" dy="0">plan() -&gt; PlannerDecision</tspan>
+</text>
+<polyline points="580,600 825,600" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="637" y="592" font-size="16" fill="#1e1e1e">
+<tspan x="637" dy="0">registry.run(tool,arg)</tspan>
+</text>
+<polyline points="825,660 580,660" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="674" y="652" font-size="16" fill="#1e1e1e">
+<tspan x="674" dy="0">tool result</tspan>
+</text>
+<polyline points="580,740 1070,740" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="748" y="732" font-size="16" fill="#1e1e1e">
+<tspan x="748" dy="0">保存 assistant message</tspan>
+</text>
+<polyline points="580,820 355,820" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="450" y="812" font-size="16" fill="#1e1e1e">
+<tspan x="450" dy="0">final_response</tspan>
+</text>
+<polyline points="355,880 145,880" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="216" y="872" font-size="16" fill="#1e1e1e">
+<tspan x="216" dy="0">打印结果</tspan>
+</text>
+</svg>

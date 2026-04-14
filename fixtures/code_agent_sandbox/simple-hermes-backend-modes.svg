@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="920" viewBox="0 0 1260 920">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#1e1e1e"/>
+</marker>
+<style>text { font-family: Inter, PingFang SC, Microsoft YaHei, sans-serif; fill: #1e1e1e; }</style>
+</defs>
+<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>
+<text x="60" y="68" font-size="28" fill="#1e1e1e">
+<tspan x="60" dy="0">Simple Hermes Backend 模式图</tspan>
+</text>
+<text x="60" y="96" font-size="18" fill="#475569">
+<tspan x="60" dy="0">同一个 SimpleAgent 支持三种 planner 模式：纯教学规则模式、直接 OpenAI-compatible 模式、复用 Hermes runtime/auth 的桥接模式</tspan>
+</text>
+<rect x="90" y="170" width="300" height="180" rx="18" ry="18" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="130" y="246" font-size="26" fill="#1e1e1e">
+<tspan x="130" dy="0">Mode 1</tspan>
+<tspan x="130" dy="32.5">rule-based</tspan>
+<tspan x="130" dy="32.5"></tspan>
+<tspan x="130" dy="32.5">无模型依赖</tspan>
+<tspan x="130" dy="32.5">最适合教学</tspan>
+</text>
+<rect x="450" y="170" width="320" height="180" rx="18" ry="18" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="490" y="242" font-size="22" fill="#1e1e1e">
+<tspan x="490" dy="0">Mode 2</tspan>
+<tspan x="490" dy="27.5">openai-compatible</tspan>
+<tspan x="490" dy="27.5"></tspan>
+<tspan x="490" dy="27.5">手动提供 base_url/api_key/model</tspan>
+<tspan x="490" dy="27.5">直接调用后端 planning</tspan>
+</text>
+<rect x="830" y="170" width="320" height="180" rx="18" ry="18" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="870" y="240" font-size="20" fill="#1e1e1e">
+<tspan x="870" dy="0">Mode 3</tspan>
+<tspan x="870" dy="25.0">hermes-runtime bridge</tspan>
+<tspan x="870" dy="25.0"></tspan>
+<tspan x="870" dy="25.0">复用 Hermes 的 runtime/auth/provider 解析</tspan>
+<tspan x="870" dy="25.0">可借原 Hermes 登录与配置</tspan>
+</text>
+<ellipse cx="620.0" cy="555.0" rx="260.0" ry="85.0" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="430" y="553" font-size="28" fill="#1e1e1e">
+<tspan x="430" dy="0">SimpleAgent</tspan>
+<tspan x="430" dy="35.0">显式命令优先本地工具</tspan>
+<tspan x="430" dy="35.0">非显式输入才交给 backend planning</tspan>
+</text>
+<polyline points="240,350 480,490" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="610,350 610,470" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="990,350 750,490" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="150" y="740" width="940" height="100" rx="18" ry="18" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="200" y="792" font-size="20" fill="#1e1e1e">
+<tspan x="200" dy="0">设计原则：教学可预测性优先——显式命令不交给模型；但在需要时，Agent 又可以接入真实 LLM backend 成为真正可用的轻量 Agent</tspan>
+</text>
+</svg>

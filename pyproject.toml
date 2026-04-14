@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simple-hermes-codex"
+version = "0.1.0"
+description = "A tiny educational reimplementation of Hermes concepts: agent loop, tools, memory, sessions, and CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Hermes Agent" }]
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+simple_hermes_codex = "simple_hermes.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["simple_hermes*"]

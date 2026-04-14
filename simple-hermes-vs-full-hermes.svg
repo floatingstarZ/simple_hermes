@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1210" height="990" viewBox="0 0 1210 990">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#1e1e1e"/>
+</marker>
+<style>text { font-family: Inter, PingFang SC, Microsoft YaHei, sans-serif; fill: #1e1e1e; }</style>
+</defs>
+<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>
+<text x="60" y="68" font-size="28" fill="#1e1e1e">
+<tspan x="60" dy="0">Simple Hermes vs Full Hermes 对照图</tspan>
+</text>
+<text x="60" y="96" font-size="18" fill="#475569">
+<tspan x="60" dy="0">左边是教学版最小工程，右边是真正的平台级 Hermes；目标不是替代，而是帮助理解层级差异</tspan>
+</text>
+<rect x="70" y="150" width="500" height="760" rx="18" ry="18" fill="#e0f2fe" stroke="#1e1e1e" stroke-width="2"/>
+<text x="220" y="190" font-size="24" fill="#1e1e1e">
+<tspan x="220" dy="0">Simple Hermes</tspan>
+</text>
+<rect x="630" y="150" width="500" height="760" rx="18" ry="18" fill="#f3e8ff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="790" y="190" font-size="24" fill="#1e1e1e">
+<tspan x="790" dy="0">Full Hermes</tspan>
+</text>
+<rect x="110" y="230" width="420" height="110" rx="18" ry="18" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="155" y="284" font-size="24" fill="#1e1e1e">
+<tspan x="155" dy="0">SimpleAgent</tspan>
+<tspan x="155" dy="30.0">规则式最小 agent loop</tspan>
+</text>
+<rect x="670" y="230" width="420" height="110" rx="18" ry="18" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="715" y="282" font-size="22" fill="#1e1e1e">
+<tspan x="715" dy="0">AIAgent</tspan>
+<tspan x="715" dy="27.5">真实多 provider、多工具、多恢复链执行核心</tspan>
+</text>
+<rect x="110" y="380" width="420" height="100" rx="18" ry="18" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="150" y="434" font-size="24" fill="#1e1e1e">
+<tspan x="150" dy="0">ToolRegistry + Built-in Tools</tspan>
+<tspan x="150" dy="30.0">最小工具平台</tspan>
+</text>
+<rect x="670" y="380" width="420" height="100" rx="18" ry="18" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="700" y="430" font-size="20" fill="#1e1e1e">
+<tspan x="700" dy="0">registry + toolsets + dozens of tools + MCP + plugins</tspan>
+<tspan x="700" dy="25.0">平台级能力平面</tspan>
+</text>
+<rect x="110" y="520" width="420" height="100" rx="18" ry="18" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="150" y="574" font-size="24" fill="#1e1e1e">
+<tspan x="150" dy="0">Split Memory + SQLite Session History</tspan>
+<tspan x="150" dy="30.0">最小 continuity</tspan>
+</text>
+<rect x="670" y="520" width="420" height="100" rx="18" ry="18" fill="#b2f2bb" stroke="#1e1e1e" stroke-width="2"/>
+<text x="710" y="570" font-size="20" fill="#1e1e1e">
+<tspan x="710" dy="0">Memory + SessionDB + Session Search + Compression + Lineage</tspan>
+<tspan x="710" dy="25.0">长期运行基础设施</tspan>
+</text>
+<rect x="110" y="660" width="420" height="100" rx="18" ry="18" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="150" y="714" font-size="24" fill="#1e1e1e">
+<tspan x="150" dy="0">单一 CLI surface</tspan>
+<tspan x="150" dy="30.0">适合教学和实验</tspan>
+</text>
+<rect x="670" y="660" width="420" height="100" rx="18" ry="18" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="710" y="712" font-size="22" fill="#1e1e1e">
+<tspan x="710" dy="0">CLI + Gateway + ACP + Cron + Messaging</tspan>
+<tspan x="710" dy="27.5">多表面平台</tspan>
+</text>
+<rect x="250" y="810" width="700" height="70" rx="18" ry="18" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="300" y="854" font-size="22" fill="#1e1e1e">
+<tspan x="300" dy="0">结论：Simple Hermes 用来学骨架；Full Hermes 用来承载真实、长期、复杂、多入口的 Agent 系统</tspan>
+</text>
+</svg>
