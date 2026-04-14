@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-root = Path('/Users/hzy/Desktop/work/simple_hermes_codex')
+root = Path(__file__).resolve().parent
 
 
 def esc(s: str) -> str:

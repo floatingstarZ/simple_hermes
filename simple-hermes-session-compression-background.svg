@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1110" viewBox="0 0 1280 1110">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+<path d="M 0 0 L 10 5 L 0 10 z" fill="#1e1e1e"/>
+</marker>
+<style>text { font-family: Inter, PingFang SC, Microsoft YaHei, sans-serif; fill: #1e1e1e; }</style>
+</defs>
+<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>
+<text x="60" y="68" font-size="28" fill="#1e1e1e">
+<tspan x="60" dy="0">Simple Hermes：长期会话、上下文压缩、后台任务</tspan>
+</text>
+<text x="60" y="100" font-size="18" fill="#475569">
+<tspan x="60" dy="0">这张图展示本轮重点实现：项目级默认会话 -&gt; 恢复最新 continuation -&gt; 结构化交接摘要 -&gt; 后台任务结果回写历史</tspan>
+</text>
+<rect x="70" y="160" width="280" height="120" rx="18" ry="18" fill="#a5d8ff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="105" y="212" font-size="22" fill="#1e1e1e">
+<tspan x="105" dy="0">CLI 启动</tspan>
+<tspan x="105" dy="27.5">project-&lt;hash&gt;</tspan>
+<tspan x="105" dy="27.5">恢复最新 continuation</tspan>
+</text>
+<rect x="455" y="160" width="300" height="120" rx="18" ry="18" fill="#c3fae8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="495" y="212" font-size="22" fill="#1e1e1e">
+<tspan x="495" dy="0">SessionStore</tspan>
+<tspan x="495" dy="27.5">sessions 表</tspan>
+<tspan x="495" dy="27.5">parent_session_id 谱系</tspan>
+</text>
+<rect x="865" y="160" width="300" height="120" rx="18" ry="18" fill="#fff3bf" stroke="#1e1e1e" stroke-width="2"/>
+<text x="905" y="211" font-size="21" fill="#1e1e1e">
+<tspan x="905" dy="0">当前会话</tspan>
+<tspan x="905" dy="26.25">root 或最新 cont-*</tspan>
+<tspan x="905" dy="26.25">新消息写到这里</tspan>
+</text>
+<polyline points="350,220 455,220" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="755,220 865,220" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="115" y="410" width="330" height="150" rx="18" ry="18" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<text x="155" y="469" font-size="21" fill="#1e1e1e">
+<tspan x="155" dy="0">压缩阈值触发</tspan>
+<tspan x="155" dy="26.25">_build_handoff_summary()</tspan>
+<tspan x="155" dy="26.25">目标 / 约束 / 进展</tspan>
+<tspan x="155" dy="26.25">文件 / 剩余工作</tspan>
+</text>
+<rect x="560" y="410" width="330" height="150" rx="18" ry="18" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<text x="600" y="469" font-size="21" fill="#1e1e1e">
+<tspan x="600" dy="0">create_continuation_session()</tspan>
+<tspan x="600" dy="26.25">写入摘要</tspan>
+<tspan x="600" dy="26.25">复制最近非工具尾部</tspan>
+<tspan x="600" dy="26.25">切换 session_id</tspan>
+</text>
+<polyline points="280,280 280,410" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="445,485 560,485" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="725,410 965,280" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="115" y="700" width="330" height="150" rx="18" ry="18" fill="#b2f2bb" stroke="#1e1e1e" stroke-width="2"/>
+<text x="155" y="759" font-size="21" fill="#1e1e1e">
+<tspan x="155" dy="0">background start &lt;cmd&gt;</tspan>
+<tspan x="155" dy="26.25">Popen + 监控线程</tspan>
+<tspan x="155" dy="26.25">合并 stdout/stderr</tspan>
+<tspan x="155" dy="26.25">bg1 / bg2 / ...</tspan>
+</text>
+<rect x="560" y="700" width="330" height="150" rx="18" ry="18" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<text x="600" y="759" font-size="21" fill="#1e1e1e">
+<tspan x="600" dy="0">background_result</tspan>
+<tspan x="600" dy="26.25">记录完成状态</tspan>
+<tspan x="600" dy="26.25">status / tail / wait / stop</tspan>
+<tspan x="600" dy="26.25">可被 history/recall 找到</tspan>
+</text>
+<rect x="950" y="700" width="250" height="150" rx="18" ry="18" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<text x="980" y="759" font-size="21" fill="#1e1e1e">
+<tspan x="980" dy="0">本地保留 trace</tspan>
+<tspan x="980" dy="26.25">test_results/*.log</tspan>
+<tspan x="980" dy="26.25">benchmark_runs/*/traces</tspan>
+</text>
+<polyline points="445,775 560,775" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="890,775 950,775" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<polyline points="725,700 965,280" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="80" y="940" width="1090" height="90" rx="18" ry="18" fill="#f8f9fa" stroke="#868e96" stroke-width="2"/>
+<text x="120" y="987" font-size="20" fill="#1e1e1e">
+<tspan x="120" dy="0">设计含义：长期会话负责“继续同一个项目”，压缩负责“跨上下文窗口保留任务状态”，后台任务负责“让长命令不堵塞下一轮协作”。</tspan>
+</text>
+</svg>

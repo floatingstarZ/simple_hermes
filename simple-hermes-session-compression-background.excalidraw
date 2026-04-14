@@ -1,0 +1,48 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "simple-hermes-codex",
+  "elements": [
+    {"id":"title","type":"text","x":60,"y":40,"width":1040,"height":34,"text":"Simple Hermes：长期会话、上下文压缩、后台任务","fontSize":28,"fontFamily":1,"strokeColor":"#1e1e1e","originalText":"Simple Hermes：长期会话、上下文压缩、后台任务","autoResize":true},
+    {"id":"sub","type":"text","x":60,"y":82,"width":1120,"height":24,"text":"这张图展示本轮重点实现：项目级默认会话 -> 恢复最新 continuation -> 结构化交接摘要 -> 后台任务结果回写历史","fontSize":18,"fontFamily":1,"strokeColor":"#475569","originalText":"这张图展示本轮重点实现：项目级默认会话 -> 恢复最新 continuation -> 结构化交接摘要 -> 后台任务结果回写历史","autoResize":true},
+
+    {"id":"r1","type":"rectangle","x":70,"y":160,"width":280,"height":120,"roundness":{"type":3},"backgroundColor":"#a5d8ff","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r1t","type":"text"}]},
+    {"id":"r1t","type":"text","x":105,"y":190,"width":210,"height":56,"text":"CLI 启动\nproject-<hash>\n恢复最新 continuation","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r1","originalText":"CLI 启动\nproject-<hash>\n恢复最新 continuation","autoResize":true},
+
+    {"id":"r2","type":"rectangle","x":455,"y":160,"width":300,"height":120,"roundness":{"type":3},"backgroundColor":"#c3fae8","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r2t","type":"text"}]},
+    {"id":"r2t","type":"text","x":495,"y":190,"width":220,"height":56,"text":"SessionStore\nsessions 表\nparent_session_id 谱系","fontSize":22,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r2","originalText":"SessionStore\nsessions 表\nparent_session_id 谱系","autoResize":true},
+
+    {"id":"r3","type":"rectangle","x":865,"y":160,"width":300,"height":120,"roundness":{"type":3},"backgroundColor":"#fff3bf","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r3t","type":"text"}]},
+    {"id":"r3t","type":"text","x":905,"y":190,"width":220,"height":56,"text":"当前会话\nroot 或最新 cont-*\n新消息写到这里","fontSize":21,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r3","originalText":"当前会话\nroot 或最新 cont-*\n新消息写到这里","autoResize":true},
+
+    {"id":"a1","type":"arrow","x":350,"y":220,"width":105,"height":0,"points":[[0,0],[105,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a2","type":"arrow","x":755,"y":220,"width":110,"height":0,"points":[[0,0],[110,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+
+    {"id":"r4","type":"rectangle","x":115,"y":410,"width":330,"height":150,"roundness":{"type":3},"backgroundColor":"#ffd8a8","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r4t","type":"text"}]},
+    {"id":"r4t","type":"text","x":155,"y":448,"width":250,"height":72,"text":"压缩阈值触发\n_build_handoff_summary()\n目标 / 约束 / 进展\n文件 / 剩余工作","fontSize":21,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r4","originalText":"压缩阈值触发\n_build_handoff_summary()\n目标 / 约束 / 进展\n文件 / 剩余工作","autoResize":true},
+
+    {"id":"r5","type":"rectangle","x":560,"y":410,"width":330,"height":150,"roundness":{"type":3},"backgroundColor":"#d0bfff","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r5t","type":"text"}]},
+    {"id":"r5t","type":"text","x":600,"y":448,"width":250,"height":72,"text":"create_continuation_session()\n写入摘要\n复制最近非工具尾部\n切换 session_id","fontSize":21,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r5","originalText":"create_continuation_session()\n写入摘要\n复制最近非工具尾部\n切换 session_id","autoResize":true},
+
+    {"id":"a3","type":"arrow","x":280,"y":280,"width":0,"height":130,"points":[[0,0],[0,130]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a4","type":"arrow","x":445,"y":485,"width":115,"height":0,"points":[[0,0],[115,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a5","type":"arrow","x":725,"y":410,"width":240,"height":-130,"points":[[0,0],[240,-130]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+
+    {"id":"r6","type":"rectangle","x":115,"y":700,"width":330,"height":150,"roundness":{"type":3},"backgroundColor":"#b2f2bb","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r6t","type":"text"}]},
+    {"id":"r6t","type":"text","x":155,"y":738,"width":250,"height":72,"text":"background start <cmd>\nPopen + 监控线程\n合并 stdout/stderr\nbg1 / bg2 / ...","fontSize":21,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r6","originalText":"background start <cmd>\nPopen + 监控线程\n合并 stdout/stderr\nbg1 / bg2 / ...","autoResize":true},
+
+    {"id":"r7","type":"rectangle","x":560,"y":700,"width":330,"height":150,"roundness":{"type":3},"backgroundColor":"#ffc9c9","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r7t","type":"text"}]},
+    {"id":"r7t","type":"text","x":600,"y":738,"width":250,"height":72,"text":"background_result\n记录完成状态\nstatus / tail / wait / stop\n可被 history/recall 找到","fontSize":21,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r7","originalText":"background_result\n记录完成状态\nstatus / tail / wait / stop\n可被 history/recall 找到","autoResize":true},
+
+    {"id":"r8","type":"rectangle","x":950,"y":700,"width":250,"height":150,"roundness":{"type":3},"backgroundColor":"#e9ecef","fillStyle":"solid","strokeColor":"#1e1e1e","boundElements":[{"id":"r8t","type":"text"}]},
+    {"id":"r8t","type":"text","x":980,"y":738,"width":190,"height":72,"text":"本地保留 trace\ntest_results/*.log\nbenchmark_runs/*/traces","fontSize":21,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"r8","originalText":"本地保留 trace\ntest_results/*.log\nbenchmark_runs/*/traces","autoResize":true},
+
+    {"id":"a6","type":"arrow","x":445,"y":775,"width":115,"height":0,"points":[[0,0],[115,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a7","type":"arrow","x":890,"y":775,"width":60,"height":0,"points":[[0,0],[60,0]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+    {"id":"a8","type":"arrow","x":725,"y":700,"width":240,"height":-420,"points":[[0,0],[240,-420]],"endArrowhead":"arrow","strokeColor":"#1e1e1e"},
+
+    {"id":"note","type":"rectangle","x":80,"y":940,"width":1090,"height":90,"roundness":{"type":3},"backgroundColor":"#f8f9fa","fillStyle":"solid","strokeColor":"#868e96","boundElements":[{"id":"notet","type":"text"}]},
+    {"id":"notet","type":"text","x":120,"y":967,"width":1010,"height":36,"text":"设计含义：长期会话负责“继续同一个项目”，压缩负责“跨上下文窗口保留任务状态”，后台任务负责“让长命令不堵塞下一轮协作”。","fontSize":20,"fontFamily":1,"strokeColor":"#1e1e1e","textAlign":"center","verticalAlign":"middle","containerId":"note","originalText":"设计含义：长期会话负责“继续同一个项目”，压缩负责“跨上下文窗口保留任务状态”，后台任务负责“让长命令不堵塞下一轮协作”。","autoResize":true}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff"}
+}
