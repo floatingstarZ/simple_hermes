@@ -453,14 +453,16 @@ flowchart LR
     CLI --> UI2["project/session detection"]
     CLI --> UI3["streamed progress"]
     CLI --> UI4["status/trace panels"]
-    CLI --> UI5["session commands\n/resume /rename"]
+    CLI --> UI5["session commands\n/resume /rename /new /reset"]
+    CLI --> UI6["runtime commands\n/compress /usage /tool-results /model /background"]
+    CLI --> UI7["checkpoint commands\n/checkpoint /rollback /undo"]
 ```
 
 ## 15. Slash session commands
 
 ```mermaid
 flowchart TD
-    Input["用户输入 /resume 或 /rename"] --> Handler["_handle_ui_command()"]
+    Input["用户输入 slash command"] --> Handler["_handle_ui_command()"]
     Handler --> Kind{"命令类型"}
 
     Kind -->|/resume 无参数| List["_format_recent_sessions()\n展示最近 session 和序号"]
@@ -476,4 +478,45 @@ flowchart TD
 
     Kind -->|/rename title| Rename["SessionStore.rename_session(current, title)"]
     Rename --> RenamePanel["Rename panel\n当前 session + title"]
+
+    Kind -->|/new title| New["ensure_session(project/chat-id)\n切换 agent.session_id"]
+    Kind -->|/reset| Reset["clear_session_messages()\n清空 messages + session_state"]
+    Kind -->|/compress| Compress["SimpleAgent.compress_now()\nsummary + continuation"]
+    Kind -->|/usage| Usage["SessionStore.usage_summary()"]
+    Kind -->|/tool-results| ToolResults["SessionStore.recent_tool_results()\n查看存储的 tool output 引用"]
+    Kind -->|/model| Model["显示或设置 backend.model"]
+    Kind -->|/background prompt| Background["start_background_agent()\nchild session + daemon thread"]
+    Kind -->|/retry| Retry["last_user_message()\n重新进入 run()"]
+    Kind -->|/checkpoint| Checkpoint["CheckpointStore.create/list"]
+    Kind -->|/rollback 或 /undo| Rollback["CheckpointStore.restore()"]
+```
+
+## 16. Checkpoint / rollback
+
+```mermaid
+flowchart TD
+    Edit["write_file / patch_file"] --> Auto["自动 checkpoint\nreason=before edit"]
+    Manual["/checkpoint 或 checkpoint create"] --> Create["CheckpointStore.create()"]
+    Auto --> Create
+    Create --> Scan["扫描 project_root 文本文件\n跳过 .git/node_modules/venv/binary"]
+    Scan --> Store["~/.simple_hermes_codex/checkpoints/<project-hash>/cp-*.json"]
+    User["/rollback latest 或 /undo"] --> Restore["CheckpointStore.restore()"]
+    Restore --> Files["恢复 checkpoint 内文本文件"]
+    Restore --> Remove["删除 checkpoint 后新增的可扫描文本文件"]
+    Files --> Report["返回 restored / removed 计数"]
+    Remove --> Report
+```
+
+## 17. HTML test report
+
+```mermaid
+flowchart LR
+    Runner["scripts/run_tests_with_results.py"] --> Run["python -m unittest discover -s tests -v"]
+    Run --> Log["unittest-<stamp>.log"]
+    Run --> Parse["parse_unittest_output()"]
+    Parse --> JSON["unittest-<stamp>.json\nper-test status"]
+    Parse --> HTML["unittest-<stamp>.html\nper-test table + raw log"]
+    Runner --> RenderLog["--render-log existing-trace.txt"]
+    RenderLog --> ParseStep["parse_trace_steps()"]
+    ParseStep --> TraceHTML["existing-trace.html\nstreamed steps + raw log"]
 ```

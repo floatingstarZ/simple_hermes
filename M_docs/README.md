@@ -35,6 +35,8 @@
 - background task 生命周期
 - delegation / parallel delegation 的 session 拓扑
 - benchmark harness 的测试路径
+- checkpoint / rollback 的项目快照路径
+- unittest 与交互式 trace 的 HTML 测试报告生成路径
 
 ## 重新生成 SVG
 

@@ -16,6 +16,7 @@ from typing import Callable, List
 
 from simple_hermes.agent.backend import LLMBackend
 from simple_hermes.config import PermissionConfig, permission_config_from_env
+from simple_hermes.state.checkpoints import CheckpointStore
 from simple_hermes.state.memory import MemoryStore
 from simple_hermes.state.session import SessionStore
 from simple_hermes.state.continuity import ContinuityView
@@ -75,6 +76,7 @@ class BuiltInTools:
         self.session_id_getter = session_id_getter
         self.continuity = ContinuityView(sessions)
         self._file_snapshots: dict[str, str] = {}
+        self.checkpoints = CheckpointStore(project_root)
         self._background_tasks: dict[str, BackgroundTask] = {}
         self._background_counter = 0
         self.registry = ToolRegistry(allowed_tools=allowed_tools)
@@ -105,6 +107,8 @@ class BuiltInTools:
         self.registry.register("glob", "Find project files by glob pattern, for example glob **/*.py", self.glob_files)
         self.registry.register("project_overview", "Summarize project type, key files, and likely verification commands", self.project_overview)
         self.registry.register("diff", "Show git diff for the project or a project-relative path", self.diff)
+        self.registry.register("checkpoint", "Create or list project checkpoints. Usage: checkpoint [list|create <reason>]", self.checkpoint)
+        self.registry.register("rollback", "Restore a project checkpoint. Usage: rollback [checkpoint-id|latest]", self.rollback)
         self.registry.register("terminal", "Run a guarded shell command in the project root", self.terminal)
         self.registry.register("run_tests", "Run Python unittest targets with a safer default command", self.run_tests)
         self.registry.register(
@@ -551,6 +555,31 @@ class BuiltInTools:
             return result + "\n\nNo in-memory edit snapshot exists for this file yet."
         return result
 
+    def checkpoint(self, text: str) -> str:
+        raw = text.strip()
+        if not raw or raw == "create":
+            record = self.checkpoints.create(reason="manual")
+            return f"Created checkpoint {record.checkpoint_id}: {record.file_count} files. Reason: {record.reason}"
+        action, _, arg = raw.partition(" ")
+        if action.lower() in {"list", "ls"}:
+            records = self.checkpoints.list_records(limit=10)
+            if not records:
+                return "No checkpoints found."
+            lines = ["Checkpoints:"]
+            for record in records:
+                created = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created_at))
+                lines.append(f"- {record.checkpoint_id}: {record.file_count} files, {created}, {record.reason}")
+            return "\n".join(lines)
+        if action.lower() == "create":
+            record = self.checkpoints.create(reason=arg or "manual")
+            return f"Created checkpoint {record.checkpoint_id}: {record.file_count} files. Reason: {record.reason}"
+        return "Usage: checkpoint [list|create <reason>]"
+
+    def rollback(self, text: str) -> str:
+        raw = text.strip()
+        checkpoint_id = None if not raw or raw == "latest" else raw
+        return self.checkpoints.restore(checkpoint_id=checkpoint_id)
+
     def run_tests(self, text: str) -> str:
         raw = text.strip()
         if not raw:
@@ -839,6 +868,7 @@ class BuiltInTools:
         if error:
             return error
         assert path is not None
+        self.checkpoints.create(reason=f"before write_file {display_path}")
         self._remember_file_snapshot(display_path, path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -877,6 +907,7 @@ class BuiltInTools:
                 rendered = "\n---\n".join(candidates)
                 return f"Target string not found in {display_path}.\nNearest candidate snippets:\n{rendered}"
             return f"Target string not found in {display_path}."
+        self.checkpoints.create(reason=f"before patch_file {display_path}")
         self._remember_file_snapshot(display_path, path)
         updated = content.replace(target, replacement, 1)
         path.write_text(updated, encoding="utf-8")

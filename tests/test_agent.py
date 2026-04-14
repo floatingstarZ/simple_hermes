@@ -6,12 +6,19 @@ from pathlib import Path
 from simple_hermes.agent import AgentTraceStep, PlannerDecision, SimpleAgent, ToolCall
 from simple_hermes.backend import OpenAICompatibleBackend, _detect_hermes_repo_root
 from simple_hermes.cli import (
+    _background,
+    _compress,
     _default_session_id,
     _detect_max_steps,
     _detect_project_root,
     _detect_session_id,
+    _model,
+    _new_session,
     _rename_session,
+    _reset_session,
     _resume_session,
+    _tool_results,
+    _usage,
 )
 from simple_hermes.agent.prompting import PLANNER_SYSTEM_MESSAGE, PromptContext, build_planner_prompt
 
@@ -922,6 +929,59 @@ class AgentPlanningTests(unittest.TestCase):
         latest_text = _resume_session(self.agent, "latest")
         self.assertIn("Resumed session", latest_text)
         self.assertEqual(self.agent.session_id, second_child)
+
+    def test_cli_session_management_helpers(self) -> None:
+        self.agent.run("remember session fact")
+        usage_text = _usage(self.agent)
+        self.assertIn("Estimated tokens", usage_text)
+        tool_results_text = _tool_results(self.agent, "")
+        self.assertIn("remember", tool_results_text)
+
+        new_text = _new_session(self.agent, "fresh work")
+        self.assertIn("Started session", new_text)
+        self.assertIn("fresh work", new_text)
+        new_session_id = self.agent.session_id
+
+        self.agent.run("remember new fact")
+        reset_text = _reset_session(self.agent)
+        self.assertIn("Cleared messages", reset_text)
+        self.assertEqual(self.agent.sessions.message_count(new_session_id), 0)
+
+    def test_cli_model_helper_switches_backend_model(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="ok", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_model",
+            backend=backend,
+        )
+        backend.model = "old-model"
+        self.assertIn("old-model", _model(agent, ""))
+
+        text = _model(agent, "new-model")
+
+        self.assertIn("new-model", text)
+        self.assertEqual(backend.model, "new-model")
+
+    def test_manual_compress_creates_continuation(self) -> None:
+        initial_session = self.agent.session_id
+        self.agent.run("remember compress me")
+
+        text = _compress(self.agent)
+
+        self.assertIn("Compressed session", text)
+        self.assertNotEqual(self.agent.session_id, initial_session)
+        self.assertTrue(self.agent.sessions.history(session_id=self.agent.session_id, limit=10))
+
+    def test_background_agent_runs_in_child_session(self) -> None:
+        text = _background(self.agent, "read README.md")
+        self.assertIn("Started background agent agent-bg1", text)
+
+        waited = _background(self.agent, "wait agent-bg1 5")
+
+        self.assertIn("done", waited)
+        self.assertIn("Agent test file", waited)
+        children = self.agent.sessions.child_sessions(self.agent.session_id)
+        self.assertTrue(any("background:" in (child.get("title") or "") for child in children))
 
     def test_child_agent_tool_restriction_blocks_parallel_delegate(self) -> None:
         child = self._make_agent(

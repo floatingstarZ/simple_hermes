@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 from .agent import AgentTraceStep, SimpleAgent
@@ -73,7 +74,9 @@ def _tips() -> str:
         "- /trace\n"
         "- /status\n"
         "- /resume\n"
-        "- /rename active coding session",
+        "- /rename active coding session\n"
+        "- /checkpoint\n"
+        "- /background run a quick check",
         color=MAGENTA,
     )
 
@@ -86,6 +89,18 @@ def _ui_help() -> str:
         "/trace     Show the last agent trace\n"
         "/resume    List or switch sessions: /resume <id|number|latest|project>\n"
         "/rename    Rename the current session: /rename <title>\n"
+        "/new       Start a fresh session: /new [title]\n"
+        "/reset     Clear current session history and active state\n"
+        "/compress  Manually compress current session into a continuation\n"
+        "/usage     Show approximate session context usage\n"
+        "/tool-results Show recent stored tool results\n"
+        "/sessions  List recent sessions\n"
+        "/model     Show or switch runtime model: /model [model]\n"
+        "/checkpoint Create/list project checkpoints\n"
+        "/rollback  Restore a checkpoint: /rollback [id|latest]\n"
+        "/undo      Restore the latest checkpoint\n"
+        "/retry     Retry the last user message\n"
+        "/background Run or inspect a background agent task\n"
         "/tips      Show example prompts\n"
         "/clear     Clear the screen\n"
         "lineage    Show session lineage\n"
@@ -202,6 +217,98 @@ def _rename_session(agent: SimpleAgent, title: str) -> str:
     return _panel("Rename", f"Renamed current session:\n{agent.session_id}\nTitle: {title}", color=GREEN)
 
 
+def _new_session(agent: SimpleAgent, title: str) -> str:
+    title = title.strip() or "new session"
+    session_id = f"{_default_session_id(agent.project_root)}/chat-{uuid.uuid4().hex[:10]}"
+    agent.sessions.ensure_session(session_id, title=title, session_type="root")
+    agent.session_id = session_id
+    agent.last_trace = []
+    return _panel("New Session", f"Started session:\n{session_id}\nTitle: {title}", color=GREEN)
+
+
+def _reset_session(agent: SimpleAgent) -> str:
+    agent.sessions.clear_session_messages(agent.session_id)
+    agent.last_trace = []
+    return _panel("Reset", f"Cleared messages and active state for:\n{agent.session_id}", color=YELLOW)
+
+
+def _usage(agent: SimpleAgent) -> str:
+    usage = agent.sessions.usage_summary(agent.session_id)
+    body = (
+        f"Session id: {agent.session_id}\n"
+        f"Messages: {usage['message_count']}\n"
+        f"Characters: {usage['char_count']}\n"
+        f"Estimated tokens: {usage['estimated_tokens']}\n"
+        f"Tool-result chars: {usage['tool_result_chars']}\n"
+        f"Summary chars: {usage['summary_chars']}"
+    )
+    return _panel("Usage", body, color=CYAN)
+
+
+def _tool_results(agent: SimpleAgent, arg: str) -> str:
+    raw = arg.strip()
+    limit = 8
+    if raw.isdigit():
+        limit = max(1, min(int(raw), 50))
+    rows = agent.sessions.recent_tool_results(agent.session_id, limit=limit)
+    if not rows:
+        return _panel("Tool Results", "No stored tool results in this session.", color=YELLOW)
+    lines = ["Recent stored tool results:"]
+    for row in rows:
+        content = _middle_truncate(row.get("content") or "", 180)
+        lines.append(f"- #{row['id']} {row.get('tool_name') or 'tool'}: {content}")
+    return _panel("Tool Results", "\n".join(lines), color=CYAN)
+
+
+def _model(agent: SimpleAgent, arg: str) -> str:
+    model = getattr(agent.backend, "model", None) if agent.backend is not None else None
+    requested = arg.strip()
+    if not requested:
+        if model:
+            return _panel("Model", f"Current model: {model}", color=CYAN)
+        return _panel("Model", "No live backend is configured; rule-based mode has no model.", color=YELLOW)
+    if agent.backend is None or not hasattr(agent.backend, "model"):
+        return _panel("Model", "Cannot switch model because no live backend is configured.", color=YELLOW)
+    setattr(agent.backend, "model", requested)
+    os.environ["SIMPLE_HERMES_MODEL"] = requested
+    return _panel("Model", f"Switched runtime model to: {requested}", color=GREEN)
+
+
+def _checkpoint(agent: SimpleAgent, arg: str) -> str:
+    text = agent.tools.run("checkpoint", arg.strip() or "create")
+    return _panel("Checkpoint", text, color=GREEN if "Created" in text else CYAN)
+
+
+def _rollback(agent: SimpleAgent, arg: str) -> str:
+    text = agent.tools.run("rollback", arg.strip() or "latest")
+    return _panel("Rollback", text, color=YELLOW)
+
+
+def _compress(agent: SimpleAgent) -> str:
+    return _panel("Compress", agent.compress_now(), color=GREEN)
+
+
+def _background(agent: SimpleAgent, arg: str) -> str:
+    raw = arg.strip()
+    if not raw or raw in {"list", "ls"}:
+        return _panel("Background", agent.background_agents_text(), color=CYAN)
+    action, _, rest = raw.partition(" ")
+    if action == "status":
+        return _panel("Background", agent.background_agent_status(rest.strip()), color=CYAN)
+    if action == "wait":
+        parts = rest.split()
+        if not parts:
+            return _panel("Background", "Usage: /background wait <id> [seconds]", color=YELLOW)
+        timeout = None
+        if len(parts) > 1:
+            try:
+                timeout = max(0.1, min(float(parts[1]), 3600.0))
+            except ValueError:
+                return _panel("Background", "Usage: /background wait <id> [seconds]", color=YELLOW)
+        return _panel("Background", agent.wait_background_agent(parts[0], timeout=timeout), color=GREEN)
+    return _panel("Background", agent.start_background_agent(raw), color=GREEN)
+
+
 def _preview_step_content(content: str, limit: int = 180) -> str:
     preview = " ".join(content.replace("\n", " ").split())
     if len(preview) > limit:
@@ -247,6 +354,28 @@ def _stream_end() -> None:
     print(f"{DIM}└─ done{RESET}", flush=True)
 
 
+def _run_agent_turn(agent: SimpleAgent, mode: str, message: str) -> None:
+    _stream_start(mode)
+    result = agent.run(message, on_step=_stream_step)
+    _stream_end()
+    agent.last_trace = result.trace
+    title = f"Assistant · {mode}"
+    print(_panel(title, result.final_response, color=GREEN if result.tool_used else CYAN))
+    if result.tool_used:
+        meta = f"tool used: {result.tool_used} | steps: {result.steps}"
+    else:
+        meta = f"steps: {result.steps}"
+    print(f"{DIM}{meta}{RESET}\n")
+
+
+def _retry_last_user(agent: SimpleAgent, mode: str) -> str | None:
+    last = agent.sessions.last_user_message(agent.session_id)
+    if not last:
+        return _panel("Retry", "No previous user message in this session.", color=YELLOW)
+    _run_agent_turn(agent, mode, last)
+    return None
+
+
 def _clear_screen() -> None:
     print("\033[2J\033[H", end="")
 
@@ -271,6 +400,44 @@ def _handle_ui_command(message: str, agent: SimpleAgent, mode: str) -> bool:
         return True
     if cmd == "/rename" or cmd.startswith("/rename "):
         print(_rename_session(agent, stripped[len("/rename"):]))
+        return True
+    if cmd == "/new" or cmd.startswith("/new "):
+        print(_new_session(agent, stripped[len("/new"):]))
+        return True
+    if cmd == "/reset":
+        print(_reset_session(agent))
+        return True
+    if cmd == "/compress":
+        print(_compress(agent))
+        return True
+    if cmd == "/usage":
+        print(_usage(agent))
+        return True
+    if cmd == "/tool-results" or cmd.startswith("/tool-results "):
+        print(_tool_results(agent, stripped[len("/tool-results"):]))
+        return True
+    if cmd == "/sessions":
+        print(_panel("Sessions", _format_recent_sessions(agent, limit=20), color=CYAN))
+        return True
+    if cmd == "/model" or cmd.startswith("/model "):
+        print(_model(agent, stripped[len("/model"):]))
+        return True
+    if cmd == "/checkpoint" or cmd.startswith("/checkpoint "):
+        print(_checkpoint(agent, stripped[len("/checkpoint"):]))
+        return True
+    if cmd == "/rollback" or cmd.startswith("/rollback "):
+        print(_rollback(agent, stripped[len("/rollback"):]))
+        return True
+    if cmd == "/undo":
+        print(_rollback(agent, "latest"))
+        return True
+    if cmd == "/retry":
+        text = _retry_last_user(agent, mode)
+        if text is not None:
+            print(text)
+        return True
+    if cmd == "/background" or cmd.startswith("/background "):
+        print(_background(agent, stripped[len("/background"):]))
         return True
     if cmd == "/clear":
         _clear_screen()
@@ -389,17 +556,7 @@ def main() -> None:
             print()
             continue
 
-        _stream_start(mode)
-        result = agent.run(message, on_step=_stream_step)
-        _stream_end()
-        agent.last_trace = result.trace
-        title = f"Assistant · {mode}"
-        print(_panel(title, result.final_response, color=GREEN if result.tool_used else CYAN))
-        if result.tool_used:
-            meta = f"tool used: {result.tool_used} | steps: {result.steps}"
-        else:
-            meta = f"steps: {result.steps}"
-        print(f"{DIM}{meta}{RESET}\n")
+        _run_agent_turn(agent, mode, message)
 
 
 if __name__ == "__main__":

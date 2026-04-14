@@ -53,6 +53,8 @@ class ToolTests(unittest.TestCase):
         self.assertIn("glob", text)
         self.assertIn("project_overview", text)
         self.assertIn("diff", text)
+        self.assertIn("checkpoint", text)
+        self.assertIn("rollback", text)
         self.assertIn("path ::: exact target", text)
 
     def test_read_file(self) -> None:
@@ -331,6 +333,54 @@ class ToolTests(unittest.TestCase):
         text = self.tools.write_file("notes/todo.txt first task")
         self.assertIn("Wrote file notes/todo.txt", text)
         self.assertEqual((self.project_root / "notes" / "todo.txt").read_text(encoding="utf-8"), "first task")
+
+    def test_checkpoint_and_rollback_restore_project_files(self) -> None:
+        target = self.project_root / "restore_me.txt"
+        target.write_text("before\n", encoding="utf-8")
+        checkpoint = self.tools.checkpoint("create baseline")
+        self.assertIn("Created checkpoint", checkpoint)
+        target.write_text("after\n", encoding="utf-8")
+        (self.project_root / "created_later.txt").write_text("new\n", encoding="utf-8")
+
+        rollback = self.tools.rollback("latest")
+
+        self.assertIn("Restored checkpoint", rollback)
+        self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
+        self.assertFalse((self.project_root / "created_later.txt").exists())
+
+    def test_write_file_creates_automatic_checkpoint(self) -> None:
+        target = self.project_root / "auto.txt"
+        target.write_text("old", encoding="utf-8")
+        self.assertIn("Wrote file auto.txt", self.tools.write_file("auto.txt ::: new"))
+        listed = self.tools.checkpoint("list")
+        self.assertIn("before write_file auto.txt", listed)
+
+    def test_checkpoint_restore_preserves_test_logs(self) -> None:
+        logs = self.project_root / "test_results"
+        logs.mkdir()
+        (logs / "trace.txt").write_text("trace before", encoding="utf-8")
+        checkpoint = self.tools.checkpoint("create baseline")
+        self.assertIn("Created checkpoint", checkpoint)
+        (logs / "trace.txt").write_text("trace after", encoding="utf-8")
+
+        rollback = self.tools.rollback("latest")
+
+        self.assertIn("Restored checkpoint", rollback)
+        self.assertEqual((logs / "trace.txt").read_text(encoding="utf-8"), "trace after")
+
+    def test_latest_checkpoint_uses_created_at_not_filename_order(self) -> None:
+        target = self.project_root / "same_second.txt"
+        target.write_text("one", encoding="utf-8")
+        with mock.patch("simple_hermes.state.checkpoints.time.strftime", return_value="cp-20260414-160000"):
+            with mock.patch("simple_hermes.state.checkpoints.time.time", side_effect=[1.0, 2.0]):
+                first = self.tools.checkpoints.create(reason="first")
+                target.write_text("two", encoding="utf-8")
+                second = self.tools.checkpoints.create(reason="second")
+
+        self.assertEqual(first.checkpoint_id, "cp-20260414-160000")
+        self.assertEqual(second.checkpoint_id, "cp-20260414-160000-1")
+        self.assertEqual(self.tools.checkpoints.latest_id(), second.checkpoint_id)
+        self.assertEqual(self.tools.checkpoints.list_records(limit=2)[0].reason, "second")
 
     def test_write_file_delimiter_format_accepts_multiline_content(self) -> None:
         text = self.tools.write_file("snake.py ::: import curses\n\nprint('snake')\n")

@@ -193,6 +193,18 @@ parallel_delegate read README.md ; summarize this project
 /trace     展示上一轮 agent trace
 /resume    列出或切换会话：/resume <session-id|number|latest|project>
 /rename    重命名当前会话：/rename <title>
+/new       新建一个干净会话：/new [title]
+/reset     清空当前会话历史与 active task 状态
+/compress  手动压缩当前会话并切换到 continuation
+/usage     查看当前会话的消息数、字符数和粗略 token 估计
+/tool-results 查看当前会话最近存储的 tool result 引用
+/sessions  查看最近会话
+/model     查看或切换当前 runtime model：/model [model]
+/checkpoint 创建或列出项目 checkpoint：/checkpoint [list|create <reason>]
+/rollback  回滚项目 checkpoint：/rollback [id|latest]
+/undo      回滚到最新 checkpoint
+/retry     重新执行当前会话最后一条用户消息
+/background 启动或查看后台 agent：/background <prompt>|list|status <id>|wait <id>
 /clear     清屏并重画 banner
 exit       退出
 ```
@@ -240,7 +252,18 @@ python3 scripts/run_tests_with_results.py
 ```text
 test_results/unittest-<timestamp>.log
 test_results/unittest-<timestamp>.json
+test_results/unittest-<timestamp>.html
 ```
+
+HTML 报告会按单个 test case 展示 pass/fail/error，并附带原始日志，便于快速浏览回归结果。
+
+已有的交互式 trace 也可以转成 HTML：
+
+```bash
+python3 scripts/run_tests_with_results.py --render-log test_results/feature-slash-smoke.txt --title "Feature slash smoke"
+```
+
+这会在同目录生成 `feature-slash-smoke.html`，把每个 streamed step 和原始 log 放在同一个页面里。
 
 只检查 benchmark harness 和 fixture 初始状态：
 

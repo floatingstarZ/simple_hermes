@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import os
 import re
+import threading
 import time
 import uuid
 from typing import Callable, Optional, Tuple, List
@@ -23,6 +24,20 @@ from simple_hermes.tools.builtin import BuiltInTools
 
 INSPECTION_TOOLS = {"read", "read_lines", "tree", "glob", "project_overview", "search"}
 ACTIVE_TASK_STATE_KEY = "active_task"
+
+
+@dataclass
+class BackgroundAgentTask:
+    task_id: str
+    prompt: str
+    session_id: str
+    started_at: float
+    status: str = "running"
+    result: str = ""
+    error: str = ""
+    completed_at: float | None = None
+    thread: threading.Thread | None = field(default=None, repr=False)
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 @dataclass
@@ -84,6 +99,8 @@ class SimpleAgent:
             self.session_id = self.sessions.latest_continuation_or_self(self.session_id)
             self.sessions.ensure_session(self.session_id)
         self.backend = backend if backend is not None else backend_from_env()
+        self._background_agent_counter = 0
+        self._background_agent_tasks: dict[str, BackgroundAgentTask] = {}
         self.tools = BuiltInTools(
             self.memory,
             self.sessions,
@@ -606,6 +623,30 @@ class SimpleAgent:
             )
         self.session_id = continuation_id
 
+    def compress_now(self) -> str:
+        history = self.sessions.history(session_id=self.session_id, limit=200)
+        if not history:
+            return "No session history to compress."
+        summary_text = self._build_handoff_summary(history)
+        tail = self._continuation_tail(history)
+        self.sessions.append("summary", summary_text, session_id=self.session_id, kind="summary")
+        continuation_id = self.sessions.create_continuation_session(self.session_id, title="manual compression")
+        self.sessions.append("summary", summary_text, session_id=continuation_id, kind="summary")
+        for row in tail:
+            self.sessions.append(
+                row.get("role", "assistant"),
+                row.get("content", ""),
+                session_id=continuation_id,
+                kind=row.get("kind"),
+                tool_name=row.get("tool_name"),
+            )
+        previous_session = self.session_id
+        self.session_id = continuation_id
+        return (
+            f"Compressed session {previous_session} into continuation {continuation_id}.\n"
+            f"Summary chars: {len(summary_text)}. Preserved tail messages: {len(tail)}."
+        )
+
     def _child_allowed_tools(self) -> set[str] | None:
         child_tools = allowed_tools_from_env("SIMPLE_HERMES_CHILD_ALLOWED_TOOLS")
         if child_tools is None:
@@ -677,6 +718,105 @@ class SimpleAgent:
         with ThreadPoolExecutor(max_workers=min(len(subtasks), 4)) as ex:
             summaries = list(ex.map(_run_subtask, child_specs))
         return "Parallel child summaries:\n" + "\n".join(summaries)
+
+    def _next_background_agent_id(self) -> str:
+        self._background_agent_counter += 1
+        return f"agent-bg{self._background_agent_counter}"
+
+    def start_background_agent(self, prompt: str) -> str:
+        prompt = prompt.strip()
+        if not prompt:
+            return "Usage: /background <prompt> or /background list|status <id>|wait <id>"
+        task_id = self._next_background_agent_id()
+        parent_session_id = self.session_id
+        child_session_id = self.sessions.create_child_session(parent_session_id, title=f"background: {prompt[:60]}")
+        task = BackgroundAgentTask(
+            task_id=task_id,
+            prompt=prompt,
+            session_id=child_session_id,
+            started_at=time.time(),
+        )
+        self._background_agent_tasks[task_id] = task
+
+        def _run() -> None:
+            child_sessions = SessionStore(path=self.sessions.path)
+            child_memory = MemoryStore(memory_path=self.memory.memory_path, user_path=self.memory.user_path)
+            child_agent = SimpleAgent(
+                project_root=self.project_root,
+                backend=self.backend,
+                max_steps=self.max_steps,
+                session_id=child_session_id,
+                memory_store=child_memory,
+                session_store=child_sessions,
+                delegation_depth=self.delegation_depth + 1,
+                max_delegation_depth=self.max_delegation_depth,
+                child_step_budget=self.child_step_budget,
+                allowed_tools=self.allowed_tools,
+            )
+            try:
+                result = child_agent.run(prompt)
+                text = result.final_response
+                child_sessions.append(
+                    "assistant",
+                    f"[background-agent:{task_id}] completed\n{text}",
+                    session_id=parent_session_id,
+                    kind="background_agent_result",
+                    tool_name="background_agent",
+                )
+                with task.lock:
+                    task.status = "done"
+                    task.result = text
+                    task.completed_at = time.time()
+            except Exception as exc:
+                child_sessions.append(
+                    "assistant",
+                    f"[background-agent:{task_id}] failed\n{exc}",
+                    session_id=parent_session_id,
+                    kind="background_agent_result",
+                    tool_name="background_agent",
+                )
+                with task.lock:
+                    task.status = "failed"
+                    task.error = str(exc)
+                    task.completed_at = time.time()
+            finally:
+                child_sessions.conn.close()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        task.thread = thread
+        thread.start()
+        return f"Started background agent {task_id} in child session {child_session_id}."
+
+    def background_agents_text(self) -> str:
+        if not self._background_agent_tasks:
+            return "No background agents in this process."
+        lines = ["Background agents:"]
+        for task_id, task in sorted(self._background_agent_tasks.items()):
+            with task.lock:
+                elapsed = max(0.0, time.time() - task.started_at)
+                lines.append(f"- {task_id}: {task.status}, {elapsed:.1f}s, session={task.session_id}, prompt={task.prompt}")
+        return "\n".join(lines)
+
+    def background_agent_status(self, task_id: str) -> str:
+        task = self._background_agent_tasks.get(task_id.strip())
+        if task is None:
+            return f"Unknown background agent: {task_id}"
+        with task.lock:
+            elapsed = max(0.0, time.time() - task.started_at)
+            text = f"{task.task_id}: {task.status}, {elapsed:.1f}s\nsession={task.session_id}\nprompt={task.prompt}"
+            if task.result:
+                text += "\n\nResult:\n" + task.result
+            if task.error:
+                text += "\n\nError:\n" + task.error
+            return text
+
+    def wait_background_agent(self, task_id: str, timeout: float | None = None) -> str:
+        task = self._background_agent_tasks.get(task_id.strip())
+        if task is None:
+            return f"Unknown background agent: {task_id}"
+        if task.thread is not None:
+            task.thread.join(timeout=timeout)
+        return self.background_agent_status(task_id)
 
     def _tool_result_message(self, tool_name: str, result: str) -> str:
         return f"[tool:{tool_name}] {result}"

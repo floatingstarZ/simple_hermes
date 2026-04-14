@@ -34,6 +34,9 @@ class SessionStoreTests(unittest.TestCase):
         row = self.store.history(limit=1)[0]
         self.assertEqual(row["kind"], "tool_result")
         self.assertEqual(row["tool_name"], "read")
+        results = self.store.recent_tool_results(limit=1)
+        self.assertEqual(results[0]["tool_name"], "read")
+        self.assertIn("used read", results[0]["content"])
 
     def test_session_state_round_trips_structured_agent_state(self) -> None:
         self.store.set_state("default", "active_task", '{"goal": "write snake"}')

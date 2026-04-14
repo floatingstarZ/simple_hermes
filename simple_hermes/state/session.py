@@ -125,6 +125,13 @@ class SessionStore:
         )
         self.conn.commit()
 
+    def clear_session_messages(self, session_id: str) -> None:
+        self.ensure_session(session_id)
+        self.conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        self.conn.execute("DELETE FROM messages_fts WHERE session_id = ?", (session_id,))
+        self.conn.execute("DELETE FROM session_state WHERE session_id = ?", (session_id,))
+        self.conn.commit()
+
     def child_sessions(self, parent_session_id: str) -> List[Dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT id, created_at, parent_session_id, title, session_type FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC",
@@ -317,6 +324,49 @@ class SessionStore:
             (session_id,),
         ).fetchone()
         return int(row[0]) if row else 0
+
+    def last_user_message(self, session_id: str = DEFAULT_SESSION_ID) -> str | None:
+        row = self.conn.execute(
+            "SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        return str(row[0]) if row else None
+
+    def usage_summary(self, session_id: str = DEFAULT_SESSION_ID) -> Dict[str, Any]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS message_count,
+                COALESCE(SUM(LENGTH(content)), 0) AS char_count,
+                COALESCE(SUM(CASE WHEN kind = 'tool_result' THEN LENGTH(content) ELSE 0 END), 0) AS tool_result_chars,
+                COALESCE(SUM(CASE WHEN role = 'summary' THEN LENGTH(content) ELSE 0 END), 0) AS summary_chars
+            FROM messages
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        message_count = int(rows["message_count"] or 0) if rows else 0
+        char_count = int(rows["char_count"] or 0) if rows else 0
+        return {
+            "message_count": message_count,
+            "char_count": char_count,
+            "estimated_tokens": max(1, char_count // 4) if char_count else 0,
+            "tool_result_chars": int(rows["tool_result_chars"] or 0) if rows else 0,
+            "summary_chars": int(rows["summary_chars"] or 0) if rows else 0,
+        }
+
+    def recent_tool_results(self, session_id: str = DEFAULT_SESSION_ID, limit: int = 8) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT id, role, content, kind, tool_name, created_at
+            FROM messages
+            WHERE session_id = ? AND kind = 'tool_result'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def search_text(
         self,
