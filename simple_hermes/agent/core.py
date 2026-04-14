@@ -790,6 +790,9 @@ class SimpleAgent:
         lower_arg = argument.lower()
         return tool_name == "terminal" and ("pytest" in lower_arg or "unittest" in lower_arg)
 
+    def _tool_result_is_diff(self, tool_name: str, result: str) -> bool:
+        return tool_name == "diff" and not self._looks_like_failed_tool_result(result)
+
     def _record_assistant_text(self, text: str) -> None:
         self.sessions.append("assistant", text, session_id=self.session_id, kind="assistant_text")
 
@@ -897,11 +900,18 @@ class SimpleAgent:
         run_observations: List[str] = []
         blocked_repeats = 0
         successful_edit = False
+        inspected_diff = False
         successful_test = False
         for step in range(1, self.max_steps + 1):
             try:
                 decision = self.plan(current_message, allow_explicit_tools=(step == 1))
             except Exception as e:
+                if last_tool_used is not None and last_text:
+                    fallback_text = f"{last_text}\n\nBackend planning failed after the tool result: {e}"
+                    self._record_assistant_text(fallback_text)
+                    trace.append(AgentTraceStep(step=step, kind="backend_error_fallback", content=fallback_text, tool_name=last_tool_used))
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=fallback_text, tool_used=last_tool_used, steps=step, trace=trace)
                 error_text = f"Backend planning failed: {e}"
                 self._record_assistant_text(error_text)
                 trace.append(AgentTraceStep(step=step, kind="backend_error", content=error_text))
@@ -915,6 +925,15 @@ class SimpleAgent:
                     trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
+                if self._needs_code_change(original_message) and successful_edit and not inspected_diff:
+                    trace.append(AgentTraceStep(step=step, kind="tool_call", content="Auto-inspect diff before final text.", tool_name="diff"))
+                    result = self.tools.run("diff", "")
+                    last_tool_used = "diff"
+                    last_text = result
+                    self._record_tool_result("diff", result)
+                    trace.append(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name="diff"))
+                    run_observations.append(self._compact_observation("diff", "", result))
+                    inspected_diff = self._tool_result_is_diff("diff", result)
                 if self._needs_test(original_message) and not successful_test:
                     recovery_message = self._premature_test_message(original_message, decision.text, run_observations)
                     trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
@@ -991,6 +1010,8 @@ class SimpleAgent:
                 completed_inspections[inspection_key] = result
             if self._tool_result_is_successful_test(decision.tool_call.name, decision.tool_call.argument, result):
                 successful_test = True
+            if self._tool_result_is_diff(decision.tool_call.name, result):
+                inspected_diff = True
             if decision.tool_call.name == "read" and self._should_short_circuit_file_explanation(original_message):
                 explained = self._explain_file_after_read(original_message, result)
                 self._record_assistant_text(explained)

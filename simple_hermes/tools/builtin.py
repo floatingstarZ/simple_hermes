@@ -194,16 +194,32 @@ class BuiltInTools:
         def walk(current: Path, prefix: str, remaining_depth: int) -> None:
             if remaining_depth <= 0 or not current.is_dir():
                 return
-            entries = [
-                child for child in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-                if child.name not in IGNORED_TREE_PARTS
-            ]
+            try:
+                children = list(current.iterdir())
+            except OSError as e:
+                lines.append(f"{prefix}[skipped: {current.name}: {e.strerror or e.__class__.__name__}]")
+                return
+
+            def sort_key(child: Path) -> tuple[bool, str]:
+                try:
+                    is_dir = child.is_dir()
+                except OSError:
+                    is_dir = False
+                return (not is_dir, child.name.lower())
+
+            entries = [child for child in sorted(children, key=sort_key) if child.name not in IGNORED_TREE_PARTS]
             for index, child in enumerate(entries):
                 connector = "└── " if index == len(entries) - 1 else "├── "
-                suffix = "/" if child.is_dir() else ""
+                try:
+                    is_dir = child.is_dir()
+                except OSError as e:
+                    lines.append(f"{prefix}{connector}{child.name} [skipped: {e.strerror or e.__class__.__name__}]")
+                    continue
+                suffix = "/" if is_dir else ""
                 lines.append(f"{prefix}{connector}{child.name}{suffix}")
                 next_prefix = prefix + ("    " if index == len(entries) - 1 else "│   ")
-                walk(child, next_prefix, remaining_depth - 1)
+                if is_dir:
+                    walk(child, next_prefix, remaining_depth - 1)
 
         if path.is_file():
             return f"Tree for {rel}\n└── {path.name}"

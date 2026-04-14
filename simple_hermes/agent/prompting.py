@@ -48,7 +48,7 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "Before patch_file, make sure the exact target text appears in a prior tool result; if a read result is truncated, use read_lines or search to inspect the exact lines first.",
             "When using patch_file from JSON, prefer a single argument string in this exact format: path ::: exact target text ::: replacement text.",
             "After reading the relevant file, move to patch_file/write_file or use read_lines/terminal for specific lines; do not repeatedly read the same file.",
-            "After editing code, use diff to inspect the change and run a relevant test command before claiming completion if the user asked to verify or complete a coding task.",
+            "After editing code, use diff to inspect the change before final text. Run a relevant test command before claiming completion if the user asked to verify or complete a coding task.",
             "If a test command fails, use the failure output to patch the implementation, then rerun tests before giving a final answer.",
             "For long-running commands, use the background tool rather than blocking indefinitely.",
             "For multi-part tasks with independent branches, consider delegate or parallel_delegate when available and useful.",

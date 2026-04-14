@@ -33,6 +33,17 @@ class ErrorBackend:
         raise RuntimeError("backend exploded")
 
 
+class ErrorAfterFirstToolBackend:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def plan(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return PlannerDecision(kind="tool_call", text="read file", tool_call=ToolCall(name="read", argument="README.md"))
+        raise RuntimeError("backend exploded")
+
+
 class BackendResponseParsingTests(unittest.TestCase):
     def test_parse_response_text_accepts_brief_explanation_around_json(self) -> None:
         decision = OpenAICompatibleBackend._parse_response_text(
@@ -502,6 +513,7 @@ class AgentPlanningTests(unittest.TestCase):
             PlannerDecision(kind="tool_call", text="read file", tool_call=ToolCall(name="read", argument="notes.txt")),
             PlannerDecision(kind="text", text="I have not changed the file yet.", tool_call=None),
             PlannerDecision(kind="tool_call", text="patch file", tool_call=ToolCall(name="patch_file", argument="notes.txt ::: old ::: new")),
+            PlannerDecision(kind="tool_call", text="inspect diff", tool_call=ToolCall(name="diff", argument="notes.txt")),
             PlannerDecision(kind="text", text="Changed and ready to test.", tool_call=None),
         ])
         agent = self._make_agent(
@@ -664,6 +676,7 @@ class AgentPlanningTests(unittest.TestCase):
                 text="write snake game",
                 tool_call=ToolCall(name="write_file", argument="snake.html ::: <!doctype html><title>Snake</title>"),
             ),
+            PlannerDecision(kind="tool_call", text="inspect diff", tool_call=ToolCall(name="diff", argument="snake.html")),
             PlannerDecision(kind="text", text="已创建 HTML 贪吃蛇。", tool_call=None),
         ])
         agent = self._make_agent(
@@ -789,6 +802,17 @@ class AgentPlanningTests(unittest.TestCase):
         result = agent.run("hi there")
         self.assertIn("backend exploded", result.final_response)
         self.assertIn("error", result.trace[-1].kind)
+
+    def test_backend_failure_after_tool_returns_tool_result(self) -> None:
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_backend_error_after_tool",
+            backend=ErrorAfterFirstToolBackend(),
+        )
+        result = agent.run("inspect README.md")
+        self.assertIn("Agent test file", result.final_response)
+        self.assertIn("Backend planning failed after the tool result", result.final_response)
+        self.assertEqual(result.trace[-1].kind, "backend_error_fallback")
 
     def test_delegate_creates_child_session_and_returns_summary(self) -> None:
         result = self.agent.run("delegate read README.md")

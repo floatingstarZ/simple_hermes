@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from simple_hermes.backend import PlannerDecision
@@ -138,6 +139,22 @@ class ToolTests(unittest.TestCase):
         self.assertIn("Tree for .", text)
         self.assertIn("README.md", text)
         self.assertIn("src/", text)
+
+    def test_tree_skips_unreadable_directories(self) -> None:
+        original_iterdir = Path.iterdir
+
+        def fake_iterdir(path):
+            if path.name == "blocked":
+                raise PermissionError(1, "Operation not permitted", str(path))
+            return original_iterdir(path)
+
+        (self.project_root / "blocked").mkdir(exist_ok=True)
+        (self.project_root / "visible").mkdir(exist_ok=True)
+        with mock.patch.object(Path, "iterdir", fake_iterdir):
+            text = self.tools.tree(". 3")
+
+        self.assertIn("visible/", text)
+        self.assertIn("[skipped: blocked: Operation not permitted]", text)
 
     def test_glob_finds_project_files(self) -> None:
         (self.project_root / "src").mkdir(exist_ok=True)
