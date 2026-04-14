@@ -5,7 +5,14 @@ from pathlib import Path
 
 from simple_hermes.agent import AgentTraceStep, PlannerDecision, SimpleAgent, ToolCall
 from simple_hermes.backend import OpenAICompatibleBackend, _detect_hermes_repo_root
-from simple_hermes.cli import _default_session_id, _detect_max_steps, _detect_project_root, _detect_session_id
+from simple_hermes.cli import (
+    _default_session_id,
+    _detect_max_steps,
+    _detect_project_root,
+    _detect_session_id,
+    _rename_session,
+    _resume_session,
+)
 from simple_hermes.agent.prompting import PLANNER_SYSTEM_MESSAGE, PromptContext, build_planner_prompt
 
 
@@ -891,6 +898,30 @@ class AgentPlanningTests(unittest.TestCase):
         )
 
         self.assertEqual(resumed.session_id, latest)
+
+    def test_cli_resume_and_rename_session_helpers(self) -> None:
+        first_child = self.agent.sessions.create_child_session(self.agent.session_id, title="first child")
+        second_child = self.agent.sessions.create_child_session(self.agent.session_id, title="second child")
+
+        rename_text = _rename_session(self.agent, "primary work")
+        self.assertIn("Renamed current session", rename_text)
+        self.assertEqual(self.agent.sessions.session_info(self.agent.session_id)["title"], "primary work")
+
+        list_text = _resume_session(self.agent, "")
+        self.assertIn("Usage: /resume", list_text)
+        self.assertIn(second_child, list_text)
+
+        resume_text = _resume_session(self.agent, second_child)
+        self.assertIn("Resumed session", resume_text)
+        self.assertEqual(self.agent.session_id, second_child)
+
+        numbered_text = _resume_session(self.agent, "2")
+        self.assertIn("Resumed session", numbered_text)
+        self.assertEqual(self.agent.session_id, first_child)
+
+        latest_text = _resume_session(self.agent, "latest")
+        self.assertIn("Resumed session", latest_text)
+        self.assertEqual(self.agent.session_id, second_child)
 
     def test_child_agent_tool_restriction_blocks_parallel_delegate(self) -> None:
         child = self._make_agent(

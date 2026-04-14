@@ -29,15 +29,17 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 
 ## 图
 
-图的源文件是根目录下的 Excalidraw JSON，SVG companion 由 `python3 render_diagrams.py` 批量生成。
+图和实现细节说明统一放在 `M_docs/`。Excalidraw 源文件和 SVG companion 由 `python3 render_diagrams.py` 批量生成。
 
-- [总体架构](simple-hermes-architecture.svg)
-- [请求时序](simple-hermes-request-sequence.svg)
-- [长期会话、上下文压缩与后台任务](simple-hermes-session-compression-background.svg)
-- [连续性与 delegation](simple-hermes-continuity-and-delegation.svg)
-- [并行 delegation](simple-hermes-parallel-delegation.svg)
-- [Backend 模式](simple-hermes-backend-modes.svg)
-- [Simple Hermes vs Full Hermes](simple-hermes-vs-full-hermes.svg)
+- [M_docs 总览](M_docs/README.md)
+- [实现细节 Mermaid 图](M_docs/IMPLEMENTATION_DETAILS.md)
+- [总体架构](M_docs/simple-hermes-architecture.svg)
+- [请求时序](M_docs/simple-hermes-request-sequence.svg)
+- [长期会话、上下文压缩与后台任务](M_docs/simple-hermes-session-compression-background.svg)
+- [连续性与 delegation](M_docs/simple-hermes-continuity-and-delegation.svg)
+- [并行 delegation](M_docs/simple-hermes-parallel-delegation.svg)
+- [Backend 模式](M_docs/simple-hermes-backend-modes.svg)
+- [Simple Hermes vs Full Hermes](M_docs/simple-hermes-vs-full-hermes.svg)
 
 ## 项目结构
 
@@ -189,6 +191,8 @@ parallel_delegate read README.md ; summarize this project
 /tips      展示示例 prompt
 /status    展示 memory/session/backend 状态
 /trace     展示上一轮 agent trace
+/resume    列出或切换会话：/resume <session-id|number|latest|project>
+/rename    重命名当前会话：/rename <title>
 /clear     清屏并重画 banner
 exit       退出
 ```

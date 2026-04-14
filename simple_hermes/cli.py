@@ -71,7 +71,9 @@ def _tips() -> str:
         "- history\n"
         "- read README.md\n"
         "- /trace\n"
-        "- /status",
+        "- /status\n"
+        "- /resume\n"
+        "- /rename active coding session",
         color=MAGENTA,
     )
 
@@ -82,6 +84,8 @@ def _ui_help() -> str:
         "/help      Show this UI help\n"
         "/status    Show session/memory/backend status\n"
         "/trace     Show the last agent trace\n"
+        "/resume    List or switch sessions: /resume <id|number|latest|project>\n"
+        "/rename    Rename the current session: /rename <title>\n"
         "/tips      Show example prompts\n"
         "/clear     Clear the screen\n"
         "lineage    Show session lineage\n"
@@ -99,6 +103,7 @@ def _status(agent: SimpleAgent, mode: str) -> str:
         f"Planner mode: {mode}\n"
         f"Project root: {agent.project_root}\n"
         f"Session id: {agent.session_id}\n"
+        f"Session title: {info.get('title') or '-'}\n"
         f"Session type: {info.get('session_type', 'unknown')}\n"
         f"Parent session: {info.get('parent_session_id') or '-'}\n"
         f"General memories: {agent.memory.general_count()}\n"
@@ -121,6 +126,80 @@ def _format_trace(agent: SimpleAgent) -> str:
             preview = preview[:220] + "..."
         lines.append(f"step {item.step}: {item.kind}{tool_suffix} -> {preview}")
     return _panel("Last trace", "\n".join(lines), color=YELLOW)
+
+
+def _middle_truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    head = (limit - 3) // 2
+    tail = limit - 3 - head
+    return f"{text[:head]}...{text[-tail:]}"
+
+
+def _format_recent_sessions(agent: SimpleAgent, limit: int = 12) -> str:
+    rows = agent.sessions.recent_sessions(limit=limit)
+    if not rows:
+        return "No sessions yet."
+    lines = ["Recent sessions:"]
+    for index, row in enumerate(rows, start=1):
+        marker = "*" if row["id"] == agent.session_id else " "
+        session_id = _middle_truncate(row["id"], 34)
+        title = _middle_truncate(row.get("title") or "(untitled)", 28)
+        session_type = _middle_truncate(row.get("session_type") or "unknown", 12)
+        parent = _middle_truncate(row.get("parent_session_id") or "-", 44)
+        lines.append(f"{index:>2}. {marker} {session_id} [{session_type}] title={title}")
+        lines.append(f"    parent={parent}")
+    return "\n".join(lines)
+
+
+def _resume_session(agent: SimpleAgent, arg: str) -> str:
+    target = arg.strip()
+    rows = agent.sessions.recent_sessions(limit=20)
+    if not target:
+        body = (
+            "Usage: /resume <session-id|number|latest|project>\n"
+            "- /resume 2 switches to the second recent session.\n"
+            "- /resume latest switches to the most recently touched session.\n"
+            "- /resume project switches to this project's latest continuation.\n\n"
+            + _format_recent_sessions(agent, limit=12)
+        )
+        return _panel("Resume", body, color=CYAN)
+
+    if target.isdigit():
+        index = int(target)
+        if index < 1 or index > len(rows):
+            return _panel("Resume", f"No recent session at index {index}.", color=YELLOW)
+        target = rows[index - 1]["id"]
+    elif target.lower() == "latest":
+        if not rows:
+            return _panel("Resume", "No sessions to resume.", color=YELLOW)
+        target = rows[0]["id"]
+    elif target.lower() == "project":
+        target = agent.sessions.latest_continuation_or_self(_default_session_id(agent.project_root))
+
+    info = agent.sessions.session_info(target)
+    if info is None:
+        return _panel("Resume", f"No session found: {target}", color=YELLOW)
+
+    agent.session_id = target
+    agent.last_trace = []
+    body = (
+        f"Resumed session: {target}\n"
+        f"Title: {info.get('title') or '(untitled)'}\n"
+        f"Type: {info.get('session_type') or 'unknown'}\n"
+        f"Messages: {agent.sessions.message_count(target)}"
+    )
+    return _panel("Resume", body, color=GREEN)
+
+
+def _rename_session(agent: SimpleAgent, title: str) -> str:
+    title = title.strip()
+    if not title:
+        return _panel("Rename", "Usage: /rename <title>", color=YELLOW)
+    agent.sessions.rename_session(agent.session_id, title)
+    return _panel("Rename", f"Renamed current session:\n{agent.session_id}\nTitle: {title}", color=GREEN)
 
 
 def _preview_step_content(content: str, limit: int = 180) -> str:
@@ -173,7 +252,8 @@ def _clear_screen() -> None:
 
 
 def _handle_ui_command(message: str, agent: SimpleAgent, mode: str) -> bool:
-    cmd = message.strip().lower()
+    stripped = message.strip()
+    cmd = stripped.lower()
     if cmd == "/help":
         print(_ui_help())
         return True
@@ -185,6 +265,12 @@ def _handle_ui_command(message: str, agent: SimpleAgent, mode: str) -> bool:
         return True
     if cmd == "/trace":
         print(_format_trace(agent))
+        return True
+    if cmd == "/resume" or cmd.startswith("/resume "):
+        print(_resume_session(agent, stripped[len("/resume"):]))
+        return True
+    if cmd == "/rename" or cmd.startswith("/rename "):
+        print(_rename_session(agent, stripped[len("/rename"):]))
         return True
     if cmd == "/clear":
         _clear_screen()

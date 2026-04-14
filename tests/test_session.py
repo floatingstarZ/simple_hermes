@@ -78,6 +78,11 @@ class SessionStoreTests(unittest.TestCase):
         self.assertIn("[child]", text)
         self.assertIn("[continuation]", text)
 
+    def test_rename_session_updates_title(self) -> None:
+        self.store.rename_session("default", "main coding session")
+        info = self.store.session_info("default")
+        self.assertEqual(info["title"], "main coding session")
+
     def test_recent_and_descendant_session_views(self) -> None:
         child_id = self.store.create_child_session("default", title="child task")
         cont_id = self.store.create_continuation_session(child_id)

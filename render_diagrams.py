@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 root = Path(__file__).resolve().parent
+docs_dir = root / "M_docs"
 
 
 def esc(s: str) -> str:
@@ -83,7 +84,7 @@ def render_file(path: Path):
     out.append('</svg>')
     path.with_suffix('.svg').write_text('\n'.join(out), encoding='utf-8')
 
-for p in root.glob('*.excalidraw'):
+for p in docs_dir.glob('*.excalidraw'):
     render_file(p)
 
 print('Rendered SVG companions for simple_hermes_codex diagrams.')

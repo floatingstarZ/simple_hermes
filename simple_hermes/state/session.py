@@ -117,6 +117,14 @@ class SessionStore:
         data["session_type"] = self._infer_session_type(data["id"], data.get("session_type"))
         return data
 
+    def rename_session(self, session_id: str, title: str) -> None:
+        self.ensure_session(session_id)
+        self.conn.execute(
+            "UPDATE sessions SET title = ? WHERE id = ?",
+            (title.strip(), session_id),
+        )
+        self.conn.commit()
+
     def child_sessions(self, parent_session_id: str) -> List[Dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT id, created_at, parent_session_id, title, session_type FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC",
