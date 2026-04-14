@@ -33,6 +33,7 @@ The fixture is a nested local git repo and is intentionally kept as a sandbox fo
 - Local `.gitignore` for the main project and nested sandbox.
 - A web-game code-agent scenario that requires project discovery, JS editing, diff inspection, and unittest verification.
 - A Python todo-list code-agent scenario that requires project discovery, business-logic editing, and unittest verification.
+- A small benchmark manifest and runner: `benchmarks/code_agent_tasks.json` plus `scripts/run_code_agent_benchmark.py`.
 - Broader code-change intent detection for create/build/add/fix style prompts and common Chinese equivalents.
 - Loop guard for repeated successful project-inspection calls such as `project_overview`, `tree`, `glob`, `search`, and `read_lines`.
 - Project-scoped default CLI session ids, with `SIMPLE_HERMES_SESSION_ID` override, to avoid cross-project history contaminating code-agent traces.

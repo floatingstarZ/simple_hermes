@@ -1,0 +1,20 @@
+[
+  {
+    "id": "coin-catcher-score",
+    "name": "Coin Catcher scoring bug",
+    "category": "javascript_bugfix",
+    "template": "fixtures/game_agent_sandbox_template",
+    "prompt": "请把这当成一个完整任务一次性完成：先解析这个小游戏项目；然后把收集金币的得分规则从每次 +1 改为每次 +10；修改后运行测试验证；最后总结改了什么和测试是否通过。",
+    "test_command": "python3 -m unittest discover -s tests -v",
+    "expected_files": ["src/game.js", "tests/test_game_rules.py"]
+  },
+  {
+    "id": "todo-active-items",
+    "name": "Todo active-items filtering bug",
+    "category": "python_business_logic_bugfix",
+    "template": "fixtures/todo_cli_sandbox_template",
+    "prompt": "请把这当成一个完整任务一次性完成：先解析这个 Python todo 项目；然后修复 active_items()，让已经完成的 todo 不再出现在 active_items 结果里，但仍保留在全部 items 里；修改后运行测试验证；最后总结改了什么和测试是否通过。",
+    "test_command": "python3 -m unittest discover -s tests -v",
+    "expected_files": ["todo_app/core.py", "tests/test_todo.py"]
+  }
+]
