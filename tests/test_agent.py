@@ -17,6 +17,7 @@ from simple_hermes.cli import (
     _rename_session,
     _reset_session,
     _resume_session,
+    _status,
     _tool_results,
     _usage,
 )
@@ -970,6 +971,32 @@ class AgentPlanningTests(unittest.TestCase):
         reset_text = _reset_session(self.agent)
         self.assertIn("Cleared messages", reset_text)
         self.assertEqual(self.agent.sessions.message_count(new_session_id), 0)
+
+    def test_cli_status_shows_runtime_project_and_task_state(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="ok", tool_call=None)])
+        backend.model = "fake-model"
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_status",
+            backend=backend,
+        )
+        agent.sessions.set_state(
+            agent.session_id,
+            "active_task",
+            '{"id": "task-status", "category": "coding", "goal": "继续完善 status 面板", "status": "in_progress"}',
+        )
+
+        text = _status(agent, "real-llm")
+
+        self.assertIn("Runtime:", text)
+        self.assertIn("FakeBackend", text)
+        self.assertIn("fake-model", text)
+        self.assertIn(str(self.project_root), text)
+        self.assertIn("Git: not a git repository", text)
+        self.assertIn("Default project session:", text)
+        self.assertIn("Active task: task-status [in_progress]", text)
+        self.assertIn("Background agents: 0", text)
+        self.assertIn("Compression threshold:", text)
 
     def test_cli_model_helper_switches_backend_model(self) -> None:
         backend = FakeBackend([PlannerDecision(kind="text", text="ok", tool_call=None)])

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -85,7 +86,7 @@ def _ui_help() -> str:
     return _panel(
         "UI commands",
         "/help      Show this UI help\n"
-        "/status    Show session/memory/backend status\n"
+        "/status    Show runtime/project/git/session/task status\n"
         "/trace     Show the last agent trace\n"
         "/resume    List or switch sessions: /resume <id|number|latest|project>\n"
         "/rename    Rename the current session: /rename <title>\n"
@@ -112,19 +113,65 @@ def _ui_help() -> str:
     )
 
 
+def _backend_summary(agent: SimpleAgent, mode: str) -> str:
+    if agent.backend is None:
+        return f"{mode} / rule-based fallback"
+    backend_name = agent.backend.__class__.__name__
+    model = getattr(agent.backend, "model", None)
+    if model:
+        return f"{mode} / {backend_name} / model={model}"
+    return f"{mode} / {backend_name}"
+
+
+def _active_task_summary(agent: SimpleAgent) -> str:
+    task = agent._load_active_task()
+    if not task:
+        return "-"
+    task_id = task.get("id") or "unknown"
+    status = task.get("status") or "unknown"
+    goal = _middle_truncate(str(task.get("goal") or ""), 48) or "(no goal)"
+    return f"{task_id} [{status}] {goal}"
+
+
+def _git_summary(project_root: Path) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "status", "--short", "--branch"],
+            cwd=project_root,
+            text=True,
+            capture_output=True,
+            timeout=3,
+        )
+    except Exception as exc:
+        return f"unavailable ({exc.__class__.__name__})"
+    if completed.returncode != 0:
+        return "not a git repository"
+    lines = completed.stdout.splitlines()
+    branch = lines[0].removeprefix("## ").strip() if lines else "unknown"
+    dirty = len(lines[1:])
+    return f"{branch}; dirty files={dirty}"
+
+
 def _status(agent: SimpleAgent, mode: str) -> str:
     info = agent.sessions.session_info(agent.session_id) or {}
+    default_session = _default_session_id(agent.project_root)
+    background_count = len(getattr(agent, "_background_agent_tasks", {}))
     body = (
-        f"Planner mode: {mode}\n"
+        f"Runtime: {_backend_summary(agent, mode)}\n"
         f"Project root: {agent.project_root}\n"
+        f"Git: {_git_summary(agent.project_root)}\n"
         f"Session id: {agent.session_id}\n"
+        f"Default project session: {default_session}\n"
         f"Session title: {info.get('title') or '-'}\n"
         f"Session type: {info.get('session_type', 'unknown')}\n"
         f"Parent session: {info.get('parent_session_id') or '-'}\n"
+        f"Active task: {_active_task_summary(agent)}\n"
+        f"Background agents: {background_count}\n"
         f"General memories: {agent.memory.general_count()}\n"
         f"User memories: {agent.memory.user_count()}\n"
         f"Session messages: {agent.sessions.message_count(agent.session_id)}\n"
-        f"Max agent steps: {agent.max_steps}"
+        f"Max agent steps: {agent.max_steps}\n"
+        f"Compression threshold: {agent._compression_threshold()}"
     )
     return _panel("Status", body, color=GREEN)
 

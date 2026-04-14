@@ -189,7 +189,7 @@ parallel_delegate read README.md ; summarize this project
 ```text
 /help      展示 UI-level help
 /tips      展示示例 prompt
-/status    展示 memory/session/backend 状态
+/status    展示 runtime、项目根、git、session、active task、后台 agent 和 memory 状态
 /trace     展示上一轮 agent trace
 /resume    列出或切换会话：/resume <session-id|number|latest|project>
 /rename    重命名当前会话：/rename <title>
