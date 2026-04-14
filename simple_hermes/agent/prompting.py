@@ -61,6 +61,8 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "Before patch_file, make sure the exact target text appears in a prior tool result; if a read result is truncated, use read_lines or search to inspect the exact lines first.",
             "When using patch_file from JSON, prefer a single argument string in this exact format: path ::: exact target text ::: replacement text.",
             "After reading the relevant file, move to patch_file/write_file or use read_lines/terminal for specific lines; do not repeatedly read the same file.",
+            "The terminal tool captures stdout and stderr directly. Do not use shell redirection such as >, >>, or 2>; if you need to persist derived content, first run the command normally, then use write_file or patch_file.",
+            "For repository workflows that use project-local scripts, run scripts with terminal/background and use their stdout or documented --output arguments. Do not keep rereading workflow files after their contents are already in the run state.",
             "After editing code, use diff to inspect the change before final text. Run a relevant test command before claiming completion if the user asked to verify or complete a coding task.",
             "If a test command fails, use the failure output to patch the implementation, then rerun tests before giving a final answer.",
             "For long-running commands, use the background tool rather than blocking indefinitely.",

@@ -108,6 +108,8 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("project-level context", prompt)
         self.assertIn("relevant SKILL.md", prompt)
         self.assertIn("Do not hardcode repository-specific tracking preferences", prompt)
+        self.assertIn("Do not use shell redirection", prompt)
+        self.assertIn("documented --output arguments", prompt)
 
     def test_planner_system_message_pushes_autonomous_tool_use(self) -> None:
         self.assertIn("autonomous planning layer", PLANNER_SYSTEM_MESSAGE)

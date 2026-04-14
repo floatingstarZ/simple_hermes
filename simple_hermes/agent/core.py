@@ -239,6 +239,11 @@ class SimpleAgent:
                 "\nThe last verification command failed. Use the failure output to identify the remaining implementation gap, "
                 "patch the relevant source file, and rerun tests before giving a final answer."
             )
+        if tool_name == "terminal" and result.startswith("Refusing terminal command with shell redirection"):
+            failure_hint += (
+                "\nThe terminal tool does not allow shell redirection. Run the command again without >, >>, or 2>; "
+                "use the captured stdout/stderr from the tool result as your observation, then persist derived content with write_file or patch_file."
+            )
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
@@ -867,6 +872,7 @@ class SimpleAgent:
             f"{self._format_run_state(observations)}\n\n"
             f"You already read {argument!r}. Do not read the same file again in this run.\n"
             "Use the existing file content to decide the next step. If you need line-specific context, use read_lines. "
+            "If this is a repository workflow, proceed to the next executable command or to write_file/patch_file; do not keep rereading broad workflow files. "
             "If the user requested a code change, proceed with patch_file or write_file before running tests.\n\n"
             f"Previous read result:\n{result}"
         )
@@ -1001,6 +1007,7 @@ class SimpleAgent:
         completed_inspections: dict[tuple[str, str], str] = {}
         run_observations: List[str] = []
         blocked_repeats = 0
+        blocked_successful_inspections = 0
         requires_edit = bool(
             active_task is not None
             and active_task.get("category") == "coding"
@@ -1082,6 +1089,7 @@ class SimpleAgent:
                 continue
             inspection_key = self._inspection_call_key(decision.tool_call.name, decision.tool_call.argument)
             if decision.tool_call.name in INSPECTION_TOOLS and inspection_key in completed_inspections:
+                blocked_successful_inspections += 1
                 if decision.tool_call.name == "read":
                     recovery_message = self._repeated_read_message(
                         original_message,
@@ -1096,6 +1104,12 @@ class SimpleAgent:
                         decision.tool_call.argument,
                         completed_inspections[inspection_key],
                         run_observations,
+                    )
+                if blocked_successful_inspections >= 4:
+                    recovery_message += (
+                        "\n\nYou are stuck in an inspection loop. For the next step, do not call read, tree, glob, search, "
+                        "or project_overview unless you name a genuinely new, narrower path. Prefer terminal/background for the next script command, "
+                        "or write_file/patch_file if enough information has been collected. Use terminal stdout directly; do not use shell redirection."
                     )
                 emit(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 current_message = recovery_message
@@ -1122,6 +1136,7 @@ class SimpleAgent:
                 successful_edit = True
             elif decision.tool_call.name in INSPECTION_TOOLS:
                 completed_inspections[inspection_key] = result
+                blocked_successful_inspections = 0
             if self._tool_result_is_successful_test(decision.tool_call.name, decision.tool_call.argument, result):
                 successful_test = True
             if self._tool_result_is_diff(decision.tool_call.name, result):
