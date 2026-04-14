@@ -122,6 +122,23 @@ class SimpleAgent:
 
     def _needs_code_change(self, message: str) -> bool:
         lower = message.lower()
+        negative_hints = (
+            "不要改代码",
+            "先不要改",
+            "不要修改",
+            "不要编辑",
+            "不要动代码",
+            "只做诊断",
+            "只分析",
+            "只看",
+            "do not edit",
+            "don't edit",
+            "do not change",
+            "no code changes",
+            "without changing",
+        )
+        if any(hint in lower for hint in negative_hints):
+            return False
         hints = (
             "add",
             "build",

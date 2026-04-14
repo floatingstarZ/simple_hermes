@@ -295,6 +295,71 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("The last verification command failed", backend.calls[2]["message"])
         self.assertEqual((self.project_root / "notes.txt").read_text(encoding="utf-8"), "fixed")
 
+    def test_multi_turn_followup_can_use_previous_diagnosis_without_forced_edit(self) -> None:
+        core_file = self.project_root / "todo_app" / "core.py"
+        core_file.parent.mkdir(exist_ok=True)
+        core_file.write_text(
+            "class TodoList:\n"
+            "    def __init__(self):\n"
+            "        self.items = []\n\n"
+            "    def active_items(self):\n"
+            "        return list(self.items)\n",
+            encoding="utf-8",
+        )
+
+        class HistoryAwareBackend:
+            def __init__(self) -> None:
+                self.calls = []
+                self.saw_prior_diagnosis = False
+
+            def plan(self, *, message: str, memory_block: str, history_text: str, tools_text: str) -> PlannerDecision:
+                self.calls.append({"message": message, "history_text": history_text})
+                if len(self.calls) == 1:
+                    return PlannerDecision(
+                        kind="tool_call",
+                        text="read core",
+                        tool_call=ToolCall(name="read", argument="todo_app/core.py"),
+                    )
+                if len(self.calls) == 2:
+                    return PlannerDecision(
+                        kind="text",
+                        text="诊断：active_items returns all items, including completed ones.",
+                        tool_call=None,
+                    )
+                if len(self.calls) == 3:
+                    self.saw_prior_diagnosis = "active_items returns all items" in history_text
+                    return PlannerDecision(
+                        kind="tool_call",
+                        text="patch active_items",
+                        tool_call=ToolCall(
+                            name="patch_file",
+                            argument=(
+                                "todo_app/core.py :::     def active_items(self):\n"
+                                "        return list(self.items)\n"
+                                " :::     def active_items(self):\n"
+                                "        return [item for item in self.items if not item.completed]\n"
+                            ),
+                        ),
+                    )
+                return PlannerDecision(kind="text", text="已根据上一轮诊断修复 active_items。", tool_call=None)
+
+        backend = HistoryAwareBackend()
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_multi_turn",
+            backend=backend,
+        )
+
+        first = agent.run("先看这个 todo 项目，告诉我 active_items 当前逻辑。只做诊断，不要修改文件。")
+        self.assertIn("active_items returns all items", first.final_response)
+        self.assertIn("return list(self.items)", core_file.read_text(encoding="utf-8"))
+
+        second = agent.run("那就修复 active_items。")
+
+        self.assertIn("已根据上一轮诊断修复", second.final_response)
+        self.assertTrue(backend.saw_prior_diagnosis)
+        self.assertIn("if not item.completed", core_file.read_text(encoding="utf-8"))
+
     def test_multi_step_backend_loop_can_use_two_tools_then_answer(self) -> None:
         backend = FakeBackend([
             PlannerDecision(kind="tool_call", text="use read", tool_call=ToolCall(name="read", argument="README.md")),
