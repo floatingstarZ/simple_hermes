@@ -137,6 +137,7 @@ Set:
 - Optional: `SIMPLE_HERMES_PROVIDER=<provider>`
 - Optional: `SIMPLE_HERMES_MODEL=<model>`
 - Optional: `SIMPLE_HERMES_HERMES_ROOT=/path/to/hermes-agent`
+- Optional: `SIMPLE_HERMES_SESSION_ID=<session id>` to force a specific session. By default the CLI uses a stable project-scoped session id, so history persists within a project without leaking across unrelated project roots.
 
 This mode tries to reuse the original Hermes runtime provider resolution, so existing Hermes auth flows and provider setup can be borrowed.
 

@@ -1,6 +1,9 @@
 # Code Agent Gap Checklist
 
-Working fixture: `fixtures/code_agent_sandbox`
+Working fixtures:
+
+- `fixtures/code_agent_sandbox`
+- `fixtures/game_agent_sandbox_template`
 
 The fixture is a nested local git repo and is intentionally kept as a sandbox for end-to-end code-agent tasks. Do not push it.
 
@@ -27,6 +30,10 @@ The fixture is a nested local git repo and is intentionally kept as a sandbox fo
 - `diff [path]` for git diff inspection.
 - Prompt guidance that prefers project inspection, exact patch targets, diff inspection, and tests.
 - Local `.gitignore` for the main project and nested sandbox.
+- A web-game code-agent scenario that requires project discovery, JS editing, diff inspection, and unittest verification.
+- Broader code-change intent detection for create/build/add/fix style prompts and common Chinese equivalents.
+- Loop guard for repeated successful project-inspection calls such as `project_overview`, `tree`, `glob`, `search`, and `read_lines`.
+- Project-scoped default CLI session ids, with `SIMPLE_HERMES_SESSION_ID` override, to avoid cross-project history contaminating code-agent traces.
 
 ## Next Pass Candidates
 

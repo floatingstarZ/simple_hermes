@@ -5,7 +5,7 @@ from pathlib import Path
 
 from simple_hermes.agent import AgentTraceStep, PlannerDecision, SimpleAgent, ToolCall
 from simple_hermes.backend import OpenAICompatibleBackend, _detect_hermes_repo_root
-from simple_hermes.cli import _detect_project_root
+from simple_hermes.cli import _default_session_id, _detect_project_root, _detect_session_id
 from simple_hermes.agent.prompting import PromptContext, build_planner_prompt
 
 
@@ -251,6 +251,16 @@ class AgentPlanningTests(unittest.TestCase):
         detected = _detect_project_root(cwd=outside, module_file=self.project_root / "simple_hermes" / "cli.py")
         self.assertEqual(detected, self.project_root.resolve())
 
+    def test_cli_uses_project_scoped_session_id_with_env_override(self) -> None:
+        default_id = _default_session_id(self.project_root)
+        self.assertTrue(default_id.startswith("project-"))
+        self.assertEqual(default_id, _detect_session_id(self.project_root))
+        os.environ["SIMPLE_HERMES_SESSION_ID"] = "manual-session"
+        try:
+            self.assertEqual(_detect_session_id(self.project_root), "manual-session")
+        finally:
+            os.environ.pop("SIMPLE_HERMES_SESSION_ID", None)
+
     def test_multi_step_backend_loop_can_use_two_tools_then_answer(self) -> None:
         backend = FakeBackend([
             PlannerDecision(kind="tool_call", text="use read", tool_call=ToolCall(name="read", argument="README.md")),
@@ -316,6 +326,26 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("I will patch", result.final_response)
         self.assertTrue(any(step.kind == "repeated_tool_blocked" for step in result.trace))
         self.assertIn("Do not read the same file again", backend.calls[-1]["message"])
+
+    def test_backend_loop_blocks_repeated_successful_project_inspection(self) -> None:
+        target = self.project_root / "notes.txt"
+        target.write_text("old value", encoding="utf-8")
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="tree once", tool_call=ToolCall(name="tree", argument=".")),
+            PlannerDecision(kind="tool_call", text="tree again", tool_call=ToolCall(name="tree", argument="")),
+            PlannerDecision(kind="tool_call", text="patch file", tool_call=ToolCall(name="patch_file", argument="notes.txt ::: old ::: new")),
+            PlannerDecision(kind="text", text="Changed notes.txt.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_repeat_inspection",
+            backend=backend,
+        )
+        result = agent.run("please modify notes.txt")
+        self.assertIn("Changed notes.txt", result.final_response)
+        self.assertEqual(target.read_text(encoding="utf-8"), "new value")
+        self.assertTrue(any(step.kind == "repeated_tool_blocked" for step in result.trace))
+        self.assertTrue(any("Do not restart project inspection" in call["message"] for call in backend.calls))
 
     def test_backend_loop_blocks_premature_text_before_code_edit(self) -> None:
         target = self.project_root / "notes.txt"
@@ -397,6 +427,86 @@ class AgentPlanningTests(unittest.TestCase):
         result = agent.run("please modify notes.txt and run tests")
         self.assertIn("real tests passed", result.final_response)
         self.assertTrue(any("Run run_tests now" in step.content for step in result.trace))
+
+    def test_backend_loop_treats_create_fix_and_add_as_code_changes(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(kind="text", text="I can create that file.", tool_call=None),
+            PlannerDecision(kind="tool_call", text="write file", tool_call=ToolCall(name="write_file", argument="notes.txt ::: created")),
+            PlannerDecision(kind="text", text="Created notes.txt.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_create_task",
+            backend=backend,
+        )
+        result = agent.run("please create notes.txt")
+        self.assertIn("Created notes.txt", result.final_response)
+        self.assertEqual((self.project_root / "notes.txt").read_text(encoding="utf-8"), "created")
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+
+    def test_backend_loop_handles_web_game_code_agent_scenario(self) -> None:
+        (self.project_root / "pyproject.toml").write_text(
+            "[project]\nname = 'coin-catcher-fixture'\nversion = '0.1.0'\n",
+            encoding="utf-8",
+        )
+        (self.project_root / "index.html").write_text(
+            "<!doctype html>\n"
+            "<html><body><p id=\"score\">Score: 0</p><button id=\"coin\">Collect coin</button>"
+            "<script src=\"src/game.js\"></script></body></html>\n",
+            encoding="utf-8",
+        )
+        src_dir = self.project_root / "src"
+        src_dir.mkdir(exist_ok=True)
+        game_file = src_dir / "game.js"
+        game_file.write_text(
+            "let score = 0;\n\n"
+            "function renderScore() {\n"
+            "  const scoreEl = document.getElementById(\"score\");\n"
+            "  if (scoreEl) {\n"
+            "    scoreEl.textContent = `Score: ${score}`;\n"
+            "  }\n"
+            "}\n\n"
+            "function collectCoin() {\n"
+            "  score += 1;\n"
+            "  renderScore();\n"
+            "  return score;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        tests_dir = self.project_root / "tests"
+        tests_dir.mkdir(exist_ok=True)
+        (tests_dir / "test_game_rules.py").write_text(
+            "import unittest\n"
+            "from pathlib import Path\n\n\n"
+            "class CoinCatcherRulesTest(unittest.TestCase):\n"
+            "    def test_collect_coin_awards_ten_points(self):\n"
+            "        source = Path('src/game.js').read_text(encoding='utf-8')\n"
+            "        self.assertIn('score += 10;', source)\n"
+            "        self.assertNotIn('score += 1;', source)\n",
+            encoding="utf-8",
+        )
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="inspect project", tool_call=ToolCall(name="project_overview", argument="")),
+            PlannerDecision(kind="tool_call", text="list code", tool_call=ToolCall(name="glob", argument="**/*")),
+            PlannerDecision(kind="tool_call", text="read game", tool_call=ToolCall(name="read", argument="src/game.js")),
+            PlannerDecision(kind="text", text="I found the scoring rule but have not changed it yet.", tool_call=None),
+            PlannerDecision(kind="tool_call", text="patch score", tool_call=ToolCall(name="patch_file", argument="src/game.js ::: score += 1; ::: score += 10;")),
+            PlannerDecision(kind="tool_call", text="inspect diff", tool_call=ToolCall(name="diff", argument="src/game.js")),
+            PlannerDecision(kind="text", text="Edited and ready.", tool_call=None),
+            PlannerDecision(kind="tool_call", text="run tests", tool_call=ToolCall(name="run_tests", argument="")),
+            PlannerDecision(kind="text", text="Updated the web game scoring and tests passed.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_web_game",
+            backend=backend,
+        )
+        result = agent.run("请完整完成这个小游戏任务：解析项目，把收集金币的得分从 1 改为 10，运行测试验证。")
+        self.assertIn("tests passed", result.final_response)
+        self.assertIn("score += 10;", game_file.read_text(encoding="utf-8"))
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+        tool_names = [step.tool_name for step in result.trace if step.kind == "tool_result"]
+        self.assertEqual(tool_names, ["project_overview", "glob", "read", "patch_file", "diff", "run_tests"])
 
     def test_backend_failure_becomes_agent_error_response(self) -> None:
         agent = self._make_agent(

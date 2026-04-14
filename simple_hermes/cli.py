@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -203,9 +204,21 @@ def _detect_project_root(cwd: Path | None = None, module_file: Path | None = Non
     return search_starts[0]
 
 
+def _default_session_id(project_root: Path) -> str:
+    digest = hashlib.sha1(str(project_root.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"project-{digest}"
+
+
+def _detect_session_id(project_root: Path) -> str:
+    explicit = os.getenv("SIMPLE_HERMES_SESSION_ID", "").strip()
+    if explicit:
+        return explicit
+    return _default_session_id(project_root)
+
+
 def main() -> None:
     project_root = _detect_project_root()
-    agent = SimpleAgent(project_root=project_root)
+    agent = SimpleAgent(project_root=project_root, session_id=_detect_session_id(project_root))
     mode = "real-llm" if agent.backend is not None else "rule-based"
     agent.last_trace = []
     session = _create_prompt_session()

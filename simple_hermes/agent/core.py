@@ -17,6 +17,8 @@ from simple_hermes.state.memory import MemoryStore
 from simple_hermes.state.session import SessionStore
 from simple_hermes.tools.builtin import BuiltInTools
 
+INSPECTION_TOOLS = {"read", "read_lines", "tree", "glob", "project_overview", "search"}
+
 
 @dataclass
 class AgentTraceStep:
@@ -121,11 +123,23 @@ class SimpleAgent:
     def _needs_code_change(self, message: str) -> bool:
         lower = message.lower()
         hints = (
+            "add",
+            "build",
+            "create",
+            "fix",
+            "implement",
             "modify",
             "change",
             "edit",
             "patch",
             "write code",
+            "新增",
+            "添加",
+            "创建",
+            "生成",
+            "修复",
+            "做个",
+            "开发",
             "改代码",
             "修改",
             "实现",
@@ -383,6 +397,14 @@ class SimpleAgent:
             return decision.text
         return f"{decision.text} | argument={decision.tool_call.argument}"
 
+    def _inspection_call_key(self, tool_name: str, argument: str) -> tuple[str, str]:
+        normalized = argument.strip()
+        if tool_name == "project_overview":
+            normalized = ""
+        elif tool_name == "tree" and not normalized:
+            normalized = "."
+        return tool_name, normalized
+
     def _looks_like_failed_tool_result(self, result: str) -> bool:
         prefixes = (
             "File not found:",
@@ -412,6 +434,15 @@ class SimpleAgent:
             f"Previous read result:\n{result}"
         )
 
+    def _repeated_inspection_message(self, original_message: str, tool_name: str, argument: str, result: str) -> str:
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"You already ran {tool_name}({argument!r}) successfully in this run. Do not restart project inspection with the same call.\n"
+            "Use the existing tool result to decide the next concrete step. If the user requested a code change, proceed with "
+            "patch_file or write_file when the target is known; otherwise use a different, narrower inspection tool.\n\n"
+            f"Previous {tool_name} result:\n{result}"
+        )
+
     def _premature_text_message(self, original_message: str, text: str) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
@@ -419,6 +450,7 @@ class SimpleAgent:
             "The user requested a code change, but no write_file or patch_file call has succeeded in this run yet. "
             "Do not end with a status-only answer. Continue with a general tool to modify the file: patch_file, write_file, "
             "or a terminal command that actually edits the file. Prefer patch_file using `path ::: exact target text ::: replacement text`. "
+            "Do not restart broad project inspection if the needed file and target text are already known from prior tool results. "
             "If the change is genuinely impossible, explain the concrete blocker."
         )
 
@@ -502,7 +534,7 @@ class SimpleAgent:
         last_tool_used: Optional[str] = None
         last_text = ""
         failed_calls: dict[tuple[str, str], str] = {}
-        completed_reads: dict[tuple[str, str], str] = {}
+        completed_inspections: dict[tuple[str, str], str] = {}
         blocked_repeats = 0
         successful_edit = False
         successful_test = False
@@ -551,8 +583,21 @@ class SimpleAgent:
                     return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
                 current_message = recovery_message
                 continue
-            if decision.tool_call.name == "read" and call_key in completed_reads:
-                recovery_message = self._repeated_read_message(original_message, decision.tool_call.argument, completed_reads[call_key])
+            inspection_key = self._inspection_call_key(decision.tool_call.name, decision.tool_call.argument)
+            if decision.tool_call.name in INSPECTION_TOOLS and inspection_key in completed_inspections:
+                if decision.tool_call.name == "read":
+                    recovery_message = self._repeated_read_message(
+                        original_message,
+                        decision.tool_call.argument,
+                        completed_inspections[inspection_key],
+                    )
+                else:
+                    recovery_message = self._repeated_inspection_message(
+                        original_message,
+                        decision.tool_call.name,
+                        decision.tool_call.argument,
+                        completed_inspections[inspection_key],
+                    )
                 trace.append(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 current_message = recovery_message
                 continue
@@ -575,8 +620,8 @@ class SimpleAgent:
                 successful_edit = True
             elif decision.tool_call.name == "terminal" and self._terminal_may_have_edited(decision.tool_call.argument, result):
                 successful_edit = True
-            elif decision.tool_call.name == "read":
-                completed_reads[call_key] = result
+            elif decision.tool_call.name in INSPECTION_TOOLS:
+                completed_inspections[inspection_key] = result
             if self._tool_result_is_successful_test(decision.tool_call.name, decision.tool_call.argument, result):
                 successful_test = True
             if decision.tool_call.name == "read" and self._should_short_circuit_file_explanation(original_message):
