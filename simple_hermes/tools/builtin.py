@@ -420,6 +420,8 @@ class BuiltInTools:
                 args = parsed
             elif parsed[0] == "unittest":
                 args = [sys.executable, "-m", *parsed]
+            elif (self.project_root / parsed[0]).is_dir():
+                args = [sys.executable, "-m", "unittest", "discover", "-s", parsed[0], "-v", *parsed[1:]]
             else:
                 args = [sys.executable, "-m", "unittest", *parsed]
         env = os.environ.copy()

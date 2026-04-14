@@ -203,9 +203,24 @@ class SimpleAgent:
             pass
         return base_explanation
 
-    def _tool_followup_message(self, original_message: str, tool_name: str, result: str) -> str:
+    def _format_run_state(self, observations: List[str]) -> str:
+        if not observations:
+            return "Run state so far: no tool calls have completed in this run."
+        return "Run state so far:\n" + "\n".join(observations[-8:])
+
+    def _compact_observation(self, tool_name: str, argument: str, result: str) -> str:
+        preview = result.replace("\n", "\\n")
+        if len(preview) > 700:
+            preview = preview[:700] + "...[truncated]"
+        rendered_arg = argument.strip()
+        if len(rendered_arg) > 160:
+            rendered_arg = rendered_arg[:160] + "...[truncated]"
+        return f"- {tool_name}({rendered_arg!r}) -> {preview}"
+
+    def _tool_followup_message(self, original_message: str, tool_name: str, result: str, observations: List[str]) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
             f"Tool {tool_name} returned:\n{result}\n\n"
             "Use the tool result to answer the user's actual request directly. "
             "Only ask for another tool if the request still cannot be answered."
@@ -417,35 +432,39 @@ class SimpleAgent:
         )
         return result.startswith(prefixes)
 
-    def _repeated_failure_message(self, original_message: str, tool_name: str, argument: str, result: str) -> str:
+    def _repeated_failure_message(self, original_message: str, tool_name: str, argument: str, result: str, observations: List[str]) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
             f"The tool call {tool_name}({argument!r}) already failed with:\n{result}\n\n"
             "Do not repeat that exact tool call. Recover by using another general tool such as tree, glob, search, read_lines, terminal, "
             "or by using a suggested project-relative path. If no more tool is needed, return a text answer."
         )
 
-    def _repeated_read_message(self, original_message: str, argument: str, result: str) -> str:
+    def _repeated_read_message(self, original_message: str, argument: str, result: str, observations: List[str]) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
             f"You already read {argument!r}. Do not read the same file again in this run.\n"
             "Use the existing file content to decide the next step. If you need line-specific context, use read_lines. "
             "If the user requested a code change, proceed with patch_file or write_file before running tests.\n\n"
             f"Previous read result:\n{result}"
         )
 
-    def _repeated_inspection_message(self, original_message: str, tool_name: str, argument: str, result: str) -> str:
+    def _repeated_inspection_message(self, original_message: str, tool_name: str, argument: str, result: str, observations: List[str]) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
             f"You already ran {tool_name}({argument!r}) successfully in this run. Do not restart project inspection with the same call.\n"
             "Use the existing tool result to decide the next concrete step. If the user requested a code change, proceed with "
             "patch_file or write_file when the target is known; otherwise use a different, narrower inspection tool.\n\n"
             f"Previous {tool_name} result:\n{result}"
         )
 
-    def _premature_text_message(self, original_message: str, text: str) -> str:
+    def _premature_text_message(self, original_message: str, text: str, observations: List[str]) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
             f"Your proposed text answer was:\n{text}\n\n"
             "The user requested a code change, but no write_file or patch_file call has succeeded in this run yet. "
             "Do not end with a status-only answer. Continue with a general tool to modify the file: patch_file, write_file, "
@@ -454,9 +473,10 @@ class SimpleAgent:
             "If the change is genuinely impossible, explain the concrete blocker."
         )
 
-    def _premature_test_message(self, original_message: str, text: str) -> str:
+    def _premature_test_message(self, original_message: str, text: str, observations: List[str]) -> str:
         return (
             f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
             f"Your proposed text answer was:\n{text}\n\n"
             "The code edit appears to be done, but the user also requested testing or verification and no test command has succeeded yet. "
             "Run run_tests now, or use terminal to run a project-appropriate test command. Do not patch again unless a test failure shows that another edit is needed."
@@ -535,6 +555,7 @@ class SimpleAgent:
         last_text = ""
         failed_calls: dict[tuple[str, str], str] = {}
         completed_inspections: dict[tuple[str, str], str] = {}
+        run_observations: List[str] = []
         blocked_repeats = 0
         successful_edit = False
         successful_test = False
@@ -550,12 +571,12 @@ class SimpleAgent:
             trace.append(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
             if decision.tool_call is None:
                 if self._needs_code_change(original_message) and not successful_edit:
-                    recovery_message = self._premature_text_message(original_message, decision.text)
+                    recovery_message = self._premature_text_message(original_message, decision.text, run_observations)
                     trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
                 if self._needs_test(original_message) and not successful_test:
-                    recovery_message = self._premature_test_message(original_message, decision.text)
+                    recovery_message = self._premature_test_message(original_message, decision.text, run_observations)
                     trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
@@ -571,6 +592,7 @@ class SimpleAgent:
                     decision.tool_call.name,
                     decision.tool_call.argument,
                     failed_calls[call_key],
+                    run_observations,
                 )
                 trace.append(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 if blocked_repeats >= 3:
@@ -590,6 +612,7 @@ class SimpleAgent:
                         original_message,
                         decision.tool_call.argument,
                         completed_inspections[inspection_key],
+                        run_observations,
                     )
                 else:
                     recovery_message = self._repeated_inspection_message(
@@ -597,6 +620,7 @@ class SimpleAgent:
                         decision.tool_call.name,
                         decision.tool_call.argument,
                         completed_inspections[inspection_key],
+                        run_observations,
                     )
                 trace.append(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 current_message = recovery_message
@@ -614,6 +638,7 @@ class SimpleAgent:
             last_text = result
             self._record_tool_result(decision.tool_call.name, result)
             trace.append(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=decision.tool_call.name))
+            run_observations.append(self._compact_observation(decision.tool_call.name, decision.tool_call.argument, result))
             if self._looks_like_failed_tool_result(result):
                 failed_calls[call_key] = result
             elif decision.tool_call.name in {"write_file", "patch_file"}:
@@ -630,7 +655,7 @@ class SimpleAgent:
                 trace.append(AgentTraceStep(step=step, kind="text", content=explained, tool_name=decision.tool_call.name))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=explained, tool_used=decision.tool_call.name, steps=step, trace=trace)
-            current_message = self._tool_followup_message(original_message, decision.tool_call.name, result)
+            current_message = self._tool_followup_message(original_message, decision.tool_call.name, result, run_observations)
 
         timeout_text = (
             "Stopped after reaching the tiny agent step limit. "

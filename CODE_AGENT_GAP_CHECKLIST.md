@@ -34,6 +34,8 @@ The fixture is a nested local git repo and is intentionally kept as a sandbox fo
 - Broader code-change intent detection for create/build/add/fix style prompts and common Chinese equivalents.
 - Loop guard for repeated successful project-inspection calls such as `project_overview`, `tree`, `glob`, `search`, and `read_lines`.
 - Project-scoped default CLI session ids, with `SIMPLE_HERMES_SESSION_ID` override, to avoid cross-project history contaminating code-agent traces.
+- Per-run tool-state summaries in planner follow-up messages, so the backend can use earlier project inspection, read, edit, and test results instead of only the last tool result.
+- `run_tests <directory>` now maps to `unittest discover -s <directory> -v`, avoiding false-positive `Ran 0 tests` results for common test-directory arguments.
 
 ## Next Pass Candidates
 

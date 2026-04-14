@@ -347,6 +347,28 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertTrue(any(step.kind == "repeated_tool_blocked" for step in result.trace))
         self.assertTrue(any("Do not restart project inspection" in call["message"] for call in backend.calls))
 
+    def test_backend_followup_carries_run_state_across_tool_calls(self) -> None:
+        target = self.project_root / "notes.txt"
+        target.write_text("old value", encoding="utf-8")
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="overview", tool_call=ToolCall(name="project_overview", argument="")),
+            PlannerDecision(kind="tool_call", text="read file", tool_call=ToolCall(name="read", argument="notes.txt")),
+            PlannerDecision(kind="tool_call", text="patch file", tool_call=ToolCall(name="patch_file", argument="notes.txt ::: old ::: new")),
+            PlannerDecision(kind="text", text="Changed notes.txt.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_run_summary",
+            backend=backend,
+        )
+        result = agent.run("please modify notes.txt")
+        self.assertIn("Changed notes.txt", result.final_response)
+        last_message = backend.calls[-1]["message"]
+        self.assertIn("Run state so far:", last_message)
+        self.assertIn("- project_overview('') ->", last_message)
+        self.assertIn("- read('notes.txt') ->", last_message)
+        self.assertIn("- patch_file('notes.txt ::: old ::: new') -> Patched file notes.txt.", last_message)
+
     def test_backend_loop_blocks_premature_text_before_code_edit(self) -> None:
         target = self.project_root / "notes.txt"
         target.write_text("old value", encoding="utf-8")

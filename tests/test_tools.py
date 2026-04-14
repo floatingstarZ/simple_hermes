@@ -169,6 +169,13 @@ class ToolTests(unittest.TestCase):
         self.assertIn("exit code: 0", text)
         self.assertIn("test_ok", text)
 
+    def test_run_tests_directory_argument_uses_unittest_discovery(self) -> None:
+        text = self.tools.run_tests("tests")
+        self.assertIn("exit code: 0", text)
+        self.assertIn("-m unittest discover -s tests -v", text)
+        self.assertIn("test_ok", text)
+        self.assertNotIn("Ran 0 tests", text)
+
     def test_run_tests_does_not_leak_agent_backend_env(self) -> None:
         (self.project_root / "tests" / "test_backend_env.py").write_text(
             "import unittest\n"
