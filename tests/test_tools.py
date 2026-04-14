@@ -55,6 +55,11 @@ class ToolTests(unittest.TestCase):
         self.assertIn("diff", text)
         self.assertIn("checkpoint", text)
         self.assertIn("rollback", text)
+        self.assertIn("skills", text)
+        self.assertIn("cron", text)
+        self.assertIn("mcp", text)
+        self.assertIn("fetch_url", text)
+        self.assertIn("credential_audit", text)
         self.assertIn("path ::: exact target", text)
 
     def test_read_file(self) -> None:
@@ -484,6 +489,81 @@ class ToolTests(unittest.TestCase):
         tools = BuiltInTools(self.memory, self.sessions, self.project_root, backend=FakeRecallBackend())
         text = tools.recall("sqlite")
         self.assertIn("MODEL RECALL SUMMARY", text)
+
+    def test_recall_all_searches_across_sessions(self) -> None:
+        child_id = self.sessions.create_child_session("default", title="child")
+        self.sessions.append("user", "cross session marker", session_id=child_id)
+
+        text = self.tools.recall_all("marker")
+
+        self.assertIn("Cross-session recall summary", text)
+        self.assertIn(child_id, text)
+        self.assertIn("cross session marker", text)
+
+    def test_skills_create_view_and_use_local_markdown(self) -> None:
+        self.tools.skills_dir = Path(self.temp_dir.name) / "skills"
+
+        created = self.tools.skills("create code-review ::: prefer concise findings")
+        listed = self.tools.skills("list")
+        viewed = self.tools.skills("view code-review")
+        used = self.tools.skills("use code-review")
+
+        self.assertIn("Created skill code-review", created)
+        self.assertIn("code-review", listed)
+        self.assertIn("prefer concise findings", viewed)
+        self.assertIn("Loaded skill into session context", used)
+        history = self.sessions.history(session_id="default", limit=10)
+        self.assertTrue(any(row.get("kind") == "skill_context" for row in history))
+
+    def test_cron_add_run_due_and_delete(self) -> None:
+        self.tools.cron_path = Path(self.temp_dir.name) / "cron.json"
+
+        added = self.tools.cron("add smoke every 1 ::: tool:remember scheduled fact")
+        jobs = self.tools._load_cron_jobs()
+        jobs[0]["next_run_at"] = 0
+        self.tools._save_cron_jobs(jobs)
+        due = self.tools.cron("run-due")
+        listed = self.tools.cron("list")
+        deleted = self.tools.cron(f"delete {jobs[0]['id']}")
+
+        self.assertIn("Added cron job", added)
+        self.assertIn("Ran due cron jobs", due)
+        self.assertIn("Saved memory", due)
+        self.assertIn("smoke", listed)
+        self.assertIn("Deleted cron job", deleted)
+
+    def test_mcp_exports_sessions_and_redacts_secret_values(self) -> None:
+        self.sessions.append("user", "api_key = sk-testsecret1234567890")
+
+        resources = self.tools.mcp("resources")
+        session_json = self.tools.mcp("session default")
+        search_json = self.tools.mcp("search api_key")
+
+        self.assertIn("simple-hermes://sessions", resources)
+        self.assertIn("[REDACTED]", session_json)
+        self.assertNotIn("sk-testsecret1234567890", session_json)
+        self.assertIn("[REDACTED]", search_json)
+
+    def test_dependency_scan_and_credential_audit_do_not_read_secret_values(self) -> None:
+        (self.project_root / "package.json").write_text(
+            '{"dependencies": {"left-pad": "1.3.0"}, "devDependencies": {"eslint": "9.0.0"}}',
+            encoding="utf-8",
+        )
+        (self.project_root / ".env.local").write_text("API_KEY=sk-should-not-appear", encoding="utf-8")
+
+        deps = self.tools.dependency_scan("")
+        audit = self.tools.credential_audit("")
+
+        self.assertIn("left-pad", deps)
+        self.assertIn(".env.local", audit)
+        self.assertIn("contents not read", audit)
+        self.assertNotIn("sk-should-not-appear", audit)
+
+    def test_fetch_url_rejects_non_http_urls_without_reading_local_files(self) -> None:
+        text = self.tools.fetch_url(str(self.project_root / ".env"))
+
+        self.assertIn("only supports public http(s) URLs", text)
+        self.assertNotIn("SECRET=***", text)
 
     def test_lineage_tool_shows_current_session_chain(self) -> None:
         child_id = self.sessions.create_child_session("default", title="child task")

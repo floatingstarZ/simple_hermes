@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import datetime as dt
 import difflib
 import json
 import os
@@ -10,12 +11,15 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+from urllib import request
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Callable, List
 
 
 from simple_hermes.agent.backend import LLMBackend
-from simple_hermes.config import PermissionConfig, permission_config_from_env
+from simple_hermes.config import CRON_PATH, SKILLS_DIR, PermissionConfig, permission_config_from_env
 from simple_hermes.state.checkpoints import CheckpointStore
 from simple_hermes.state.memory import MemoryStore
 from simple_hermes.state.session import SessionStore
@@ -27,8 +31,11 @@ SENSITIVE_PARTS = {".git", ".ssh"}
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".token"}
 DANGEROUS_TERMINAL_COMMANDS = {"rm", "sudo", "su", "chmod", "chown", "mkfs", "dd", "shutdown", "reboot", "kill", "pkill", "killall"}
 IGNORED_TREE_PARTS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache"}
+SENSITIVE_AUDIT_NAMES = {".env", ".env.local", ".npmrc", ".pypirc", "credentials.json", "auth-profiles.json"}
+SENSITIVE_AUDIT_PARTS = {".ssh", ".aws", ".config/gcloud"}
 MAX_TOOL_OUTPUT_CHARS = 3000
 MAX_READ_FILE_CHARS = 12000
+MAX_FETCH_URL_CHARS = 12000
 TERMINAL_TIMEOUT_SECONDS = 10
 RUN_TESTS_TIMEOUT_SECONDS = 30
 DEFAULT_TREE_DEPTH = 2
@@ -84,6 +91,8 @@ class BuiltInTools:
         self.continuity = ContinuityView(sessions)
         self._file_snapshots: dict[str, str] = {}
         self.checkpoints = CheckpointStore(project_root)
+        self.skills_dir = Path(os.getenv("SIMPLE_HERMES_SKILLS_DIR", str(SKILLS_DIR))).expanduser()
+        self.cron_path = Path(os.getenv("SIMPLE_HERMES_CRON_PATH", str(CRON_PATH))).expanduser()
         self._background_tasks: dict[str, BackgroundTask] = {}
         self._background_counter = 0
         self.registry = ToolRegistry(allowed_tools=allowed_tools)
@@ -110,6 +119,10 @@ class BuiltInTools:
         self.registry.register("sessions", "List recent sessions", self.sessions_view)
         self.registry.register("descendants", "List descendant sessions for the current session", self.descendants)
         self.registry.register("recall", "Search session history", self.recall)
+        self.registry.register("recall_all", "Search history across all sessions", self.recall_all)
+        self.registry.register("skills", "Manage local Markdown skills. Usage: skills list|view <name>|create <name> ::: <body>|use <name>", self.skills)
+        self.registry.register("cron", "Manage scheduled tasks. Usage: cron add <name> every <seconds> ::: <text> | list | run-due | run <id> | delete <id>", self.cron)
+        self.registry.register("mcp", "Export session data through a small MCP-like JSON interface. Usage: mcp resources|sessions|session <id>|search <query>", self.mcp)
         self.registry.register("read", "Read a file relative to the project root", self.read_file)
         self.registry.register("read_lines", "Read a numbered line range. Usage: read_lines <path> <start> <end>", self.read_lines)
         self.registry.register("tree", "Show a compact project tree for a path inside the project", self.tree)
@@ -139,6 +152,9 @@ class BuiltInTools:
         self.registry.register("summarize", "Summarize what Simple Hermes is", self.summarize)
         self.registry.register("delegate", "Run a tiny child agent on a subtask and return a summary", self.delegate)
         self.registry.register("parallel_delegate", "Run a few independent child tasks concurrently and return summaries", self.parallel_delegate)
+        self.registry.register("fetch_url", "Fetch a public http(s) URL without auth headers and return a text preview", self.fetch_url)
+        self.registry.register("dependency_scan", "Inventory local dependency manifests without contacting vulnerability services", self.dependency_scan)
+        self.registry.register("credential_audit", "List likely credential files by path only; never reads or prints their contents", self.credential_audit)
         self.registry.register("help", "Show available tools", self.help)
 
     def _approval_required(self, operation: str) -> bool:
@@ -435,6 +451,225 @@ class BuiltInTools:
             return "; ".join(row['content'][:80] for row in rows[:3])
 
         return self.sessions.search_text(query, session_id=self._current_session_id(), summarizer=_summarizer)
+
+    def recall_all(self, text: str) -> str:
+        query = text.strip()
+        if not query:
+            return "Usage: recall_all <query>"
+        return self.sessions.search_all_text(query, limit=20)
+
+    def _safe_skill_name(self, raw: str) -> str | None:
+        name = raw.strip().replace(" ", "-")
+        if not name or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+            return None
+        if name in {".", ".."}:
+            return None
+        return name
+
+    def _skill_path(self, name: str) -> Path:
+        return self.skills_dir / f"{name}.md"
+
+    def skills(self, text: str) -> str:
+        """本地 Markdown skill 管理入口，先实现最小可用的 procedural memory。"""
+        raw = text.strip()
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
+        if not raw or raw in {"list", "ls"}:
+            skills = sorted(path.stem for path in self.skills_dir.glob("*.md") if path.is_file())
+            if not skills:
+                return f"No local skills found in {self.skills_dir}."
+            return "Local skills:\n" + "\n".join(f"- {name}" for name in skills)
+
+        action, _, rest = raw.partition(" ")
+        action = action.lower()
+        if action == "create":
+            if " ::: " not in rest:
+                return "Usage: skills create <name> ::: <markdown body>"
+            name_text, body = rest.split(" ::: ", 1)
+            name = self._safe_skill_name(name_text)
+            if name is None:
+                return "Invalid skill name. Use letters, numbers, dot, dash, or underscore."
+            path = self._skill_path(name)
+            content = body.strip()
+            if not content.startswith("#"):
+                content = f"# {name}\n\n{content}"
+            path.write_text(content + "\n", encoding="utf-8")
+            return f"Created skill {name}: {path}"
+
+        if action in {"view", "use"}:
+            name = self._safe_skill_name(rest)
+            if name is None:
+                return f"Usage: skills {action} <name>"
+            path = self._skill_path(name)
+            if not path.exists():
+                return f"Skill not found: {name}"
+            body = path.read_text(encoding="utf-8", errors="replace")
+            if action == "use":
+                self.sessions.append(
+                    "summary",
+                    f"[skill:{name}]\n{body}",
+                    session_id=self._current_session_id(),
+                    kind="skill_context",
+                    tool_name="skills",
+                )
+                return f"Loaded skill into session context: {name}\n\n{self._truncate(body)}"
+            return self._truncate(f"# skill:{name}\n\n{body}")
+
+        if action in {"delete", "rm"}:
+            name = self._safe_skill_name(rest)
+            if name is None:
+                return "Usage: skills delete <name>"
+            path = self._skill_path(name)
+            if not path.exists():
+                return f"Skill not found: {name}"
+            path.unlink()
+            return f"Deleted skill {name}."
+
+        return "Usage: skills list|view <name>|use <name>|create <name> ::: <markdown body>|delete <name>"
+
+    def _load_cron_jobs(self) -> list[dict]:
+        if not self.cron_path.exists():
+            return []
+        try:
+            data = json.loads(self.cron_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        return data if isinstance(data, list) else []
+
+    def _save_cron_jobs(self, jobs: list[dict]) -> None:
+        self.cron_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cron_path.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _format_cron_job(self, job: dict) -> str:
+        next_run = dt.datetime.fromtimestamp(float(job.get("next_run_at") or 0)).isoformat(timespec="seconds")
+        return (
+            f"- {job.get('id')}: {job.get('name')} every {job.get('interval_seconds')}s "
+            f"next={next_run} enabled={job.get('enabled', True)} text={job.get('text')}"
+        )
+
+    def _run_cron_job(self, job: dict) -> str:
+        text = str(job.get("text") or "").strip()
+        if not text:
+            return f"Cron job {job.get('id')} has no text."
+        if text.startswith("tool:"):
+            tool_text = text[len("tool:"):].strip()
+            tool_name, _, arg = tool_text.partition(" ")
+            result = self.registry.run(tool_name.strip(), arg.strip())
+        else:
+            result = f"Scheduled prompt ready for agent processing: {text}"
+        self.sessions.append(
+            "assistant",
+            f"[cron:{job.get('id')}] {result}",
+            session_id=self._current_session_id(),
+            kind="cron_result",
+            tool_name="cron",
+        )
+        return result
+
+    def cron(self, text: str) -> str:
+        """轻量 cron 注册表；真正的常驻调度可由外部循环定期调用 run-due。"""
+        raw = text.strip()
+        jobs = self._load_cron_jobs()
+        if not raw or raw in {"list", "ls"}:
+            if not jobs:
+                return f"No cron jobs configured at {self.cron_path}."
+            return "Cron jobs:\n" + "\n".join(self._format_cron_job(job) for job in jobs)
+
+        action, _, rest = raw.partition(" ")
+        action = action.lower()
+        now = time.time()
+        if action == "add":
+            match = re.match(r"(?P<name>.+?)\s+every\s+(?P<seconds>\d+)\s+:::\s+(?P<text>.+)", rest, flags=re.DOTALL)
+            if not match:
+                return "Usage: cron add <name> every <seconds> ::: <text>"
+            interval = max(1, int(match.group("seconds")))
+            job = {
+                "id": f"cron-{uuid.uuid4().hex[:10]}",
+                "name": match.group("name").strip(),
+                "interval_seconds": interval,
+                "text": match.group("text").strip(),
+                "created_at": now,
+                "next_run_at": now + interval,
+                "last_run_at": None,
+                "enabled": True,
+                "session_id": self._current_session_id(),
+            }
+            jobs.append(job)
+            self._save_cron_jobs(jobs)
+            return f"Added cron job {job['id']}: {job['name']}"
+
+        if action == "delete":
+            job_id = rest.strip()
+            kept = [job for job in jobs if job.get("id") != job_id]
+            if len(kept) == len(jobs):
+                return f"Cron job not found: {job_id}"
+            self._save_cron_jobs(kept)
+            return f"Deleted cron job {job_id}."
+
+        if action == "run":
+            job_id = rest.strip()
+            for job in jobs:
+                if job.get("id") == job_id:
+                    result = self._run_cron_job(job)
+                    job["last_run_at"] = now
+                    job["next_run_at"] = now + int(job.get("interval_seconds") or 1)
+                    self._save_cron_jobs(jobs)
+                    return f"Ran cron job {job_id}:\n{result}"
+            return f"Cron job not found: {job_id}"
+
+        if action == "run-due":
+            due = [job for job in jobs if job.get("enabled", True) and float(job.get("next_run_at") or 0) <= now]
+            if not due:
+                return "No cron jobs are due."
+            lines = []
+            for job in due:
+                result = self._run_cron_job(job)
+                job["last_run_at"] = now
+                job["next_run_at"] = now + int(job.get("interval_seconds") or 1)
+                lines.append(f"{job.get('id')}: {result}")
+            self._save_cron_jobs(jobs)
+            return "Ran due cron jobs:\n" + "\n".join(lines)
+
+        return "Usage: cron add <name> every <seconds> ::: <text> | list | run-due | run <id> | delete <id>"
+
+    def _redact_secret_text(self, text: str) -> str:
+        patterns = [
+            r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
+            r"sk-[A-Za-z0-9_-]{12,}",
+        ]
+        redacted = text
+        for pattern in patterns:
+            redacted = re.sub(pattern, lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]" if len(m.groups()) >= 2 else "[REDACTED]", redacted)
+        return redacted
+
+    def mcp(self, text: str) -> str:
+        """提供一个小型 MCP-like JSON 接口，便于后续接真实 MCP server。"""
+        raw = text.strip()
+        action, _, rest = raw.partition(" ")
+        action = action or "resources"
+        if action == "resources":
+            payload = {
+                "resources": [
+                    {"uri": "simple-hermes://sessions", "description": "Recent Simple Hermes sessions"},
+                    {"uri": "simple-hermes://session/<id>", "description": "Messages for one session"},
+                    {"uri": "simple-hermes://search/<query>", "description": "Cross-session recall search"},
+                ]
+            }
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+        if action == "sessions":
+            return json.dumps({"sessions": self.sessions.recent_sessions(limit=20)}, ensure_ascii=False, indent=2)
+        if action == "session":
+            session_id = rest.strip() or self._current_session_id()
+            payload = {
+                "session": self.sessions.session_info(session_id),
+                "messages": self.sessions.messages_for_session(session_id, limit=100),
+            }
+            return self._redact_secret_text(json.dumps(payload, ensure_ascii=False, indent=2))
+        if action == "search":
+            query = rest.strip()
+            if not query:
+                return "Usage: mcp search <query>"
+            return self._redact_secret_text(json.dumps({"results": self.sessions.search_all(query, limit=20)}, ensure_ascii=False, indent=2))
+        return "Usage: mcp resources|sessions|session <id>|search <query>"
 
     def read_file(self, text: str) -> str:
         path, display_path, error = self._resolve_project_path(text)
@@ -1003,6 +1238,100 @@ class BuiltInTools:
         if not task:
             return "Usage: parallel_delegate <task1 ; task2 ; ...>"
         return self.delegate_runner(f"parallel::{task}")
+
+    def fetch_url(self, text: str) -> str:
+        """无认证头的轻量网页抓取工具，避免误带本机 API key。"""
+        url = text.strip()
+        if not url:
+            return "Usage: fetch_url <https-url>"
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return "fetch_url only supports public http(s) URLs."
+        req = request.Request(
+            url,
+            headers={
+                "User-Agent": "simple-hermes-codex/0.1",
+                "Accept": "text/plain,text/html,application/json;q=0.9,*/*;q=0.1",
+            },
+            method="GET",
+        )
+        try:
+            with request.urlopen(req, timeout=10) as resp:
+                content_type = resp.headers.get("content-type", "")
+                raw = resp.read(MAX_FETCH_URL_CHARS + 1)
+                status = getattr(resp, "status", "unknown")
+        except Exception as exc:
+            return f"fetch_url failed: {exc.__class__.__name__}: {exc}"
+        text_preview = raw[:MAX_FETCH_URL_CHARS].decode("utf-8", errors="replace")
+        if len(raw) > MAX_FETCH_URL_CHARS:
+            text_preview += "\n...[truncated]..."
+        return self._redact_secret_text(f"Fetched {url}\nstatus: {status}\ncontent-type: {content_type}\n\n{text_preview}")
+
+    def dependency_scan(self, _: str) -> str:
+        """本地依赖清单扫描；不访问 OSV 或其他外部漏洞服务。"""
+        lines = ["Dependency scan (local manifests only; no vulnerability service contacted):"]
+        package_json = self.project_root / "package.json"
+        if package_json.exists():
+            try:
+                package = json.loads(package_json.read_text(encoding="utf-8"))
+            except Exception as exc:
+                lines.append(f"- package.json: failed to parse ({exc.__class__.__name__})")
+            else:
+                deps = {}
+                for section in ("dependencies", "devDependencies", "optionalDependencies"):
+                    value = package.get(section, {}) if isinstance(package, dict) else {}
+                    if isinstance(value, dict):
+                        deps.update({f"{name} ({section})": version for name, version in value.items()})
+                lines.append(f"- package.json dependencies: {len(deps)}")
+                for name, version in sorted(deps.items())[:40]:
+                    lines.append(f"  - {name}: {version}")
+        pyproject = self.project_root / "pyproject.toml"
+        if pyproject.exists():
+            content = pyproject.read_text(encoding="utf-8", errors="replace")
+            deps = re.findall(r"['\"]([A-Za-z0-9_.-]+[A-Za-z0-9_.<>=!~ -]*)['\"]", content)
+            lines.append(f"- pyproject.toml quoted dependency-like entries: {len(deps)}")
+            for item in deps[:40]:
+                lines.append(f"  - {item}")
+        requirements = sorted(self.project_root.glob("requirements*.txt"))
+        for path in requirements[:8]:
+            rel = path.relative_to(self.project_root)
+            deps = [
+                line.strip()
+                for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            lines.append(f"- {rel}: {len(deps)} entries")
+            for item in deps[:20]:
+                lines.append(f"  - {item}")
+        if len(lines) == 1:
+            lines.append("- no supported dependency manifests found.")
+        return "\n".join(lines)
+
+    def credential_audit(self, _: str) -> str:
+        """只列出疑似凭据文件路径，不读取文件内容。"""
+        matches: list[str] = []
+        for path in self.project_root.rglob("*"):
+            if path.is_dir():
+                continue
+            try:
+                rel = str(path.relative_to(self.project_root))
+            except ValueError:
+                rel = str(path)
+            rel_lower = rel.lower()
+            if path.name.lower() in SENSITIVE_AUDIT_NAMES:
+                matches.append(rel)
+            elif any(part in rel_lower for part in SENSITIVE_AUDIT_PARTS):
+                matches.append(rel)
+            elif path.suffix.lower() in SENSITIVE_SUFFIXES:
+                matches.append(rel)
+            if len(matches) >= 100:
+                break
+        if not matches:
+            return "No likely credential files found under the project root. Contents were not read."
+        return (
+            "Likely credential-bearing files under project root (contents not read, values redacted by design):\n"
+            + "\n".join(f"- {item}" for item in sorted(matches))
+        )
 
     def help(self, _: str) -> str:
         return self.registry.help_text()

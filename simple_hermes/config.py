@@ -12,11 +12,14 @@ MEMORY_PATH = BASE_DIR / "memory.txt"
 USER_MEMORY_PATH = BASE_DIR / "user.txt"
 DB_PATH = BASE_DIR / "sessions.db"
 DEFAULT_SESSION_ID = "default"
+SKILLS_DIR = BASE_DIR / "skills"
+CRON_PATH = BASE_DIR / "cron_jobs.json"
 
 DEFAULT_CHILD_SAFE_TOOLS = {
     "help",
     "history",
     "recall",
+    "recall_all",
     "read",
     "read_lines",
     "glob",
@@ -30,6 +33,10 @@ DEFAULT_CHILD_SAFE_TOOLS = {
     "remember_user",
     "tree",
     "run_tests",
+    "skills",
+    "mcp",
+    "dependency_scan",
+    "credential_audit",
 }
 
 

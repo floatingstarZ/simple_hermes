@@ -11,11 +11,15 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 - 可选 OpenAI-compatible backend。
 - 可选 Hermes runtime bridge：复用 Hermes 的 provider/auth 解析。
 - 代码工具：`read`、`read_lines`、`tree`、`glob`、`project_overview`、`search`、`write_file`、`patch_file`、`diff`、`terminal`、`run_tests`。
+- 扩展工具雏形：`fetch_url`、`dependency_scan`、`credential_audit`。`credential_audit` 只列路径，不读取或打印密钥内容。
 - 后台任务工具：`background start/list/status/tail/wait/stop`。
 - 持久化 memory：general memory 和 user profile memory 分开存。
-- SQLite 会话历史：记录 `kind`、`tool_name`、session lineage、descendants 和 focused recall。
+- SQLite 会话历史：记录 `kind`、`tool_name`、session lineage、descendants、focused recall 和 cross-session recall。
 - 长期会话：默认按 project root 生成稳定 session id，并自动恢复最新 continuation。
 - 上下文压缩：结构化 handoff summary，包含 goal、constraints、progress、files、remaining work。
+- 本地 skills 雏形：用 `skills create/view/use/list/delete` 管理 Markdown skill，并可加载到当前 session context。
+- cron 雏形：用 `cron add/list/run-due/run/delete` 保存和触发轻量 scheduled tasks。
+- MCP-like 会话导出：用 `mcp resources/sessions/session/search` 导出 session 数据，导出路径会做密钥文本脱敏。
 - delegation 骨架：child sessions、child-agent summary、parallel delegation、depth limits、child tool restrictions。
 - 可配置权限与工具 allowlist。
 - Code-agent benchmark fixtures：覆盖单轮、多轮、JavaScript、Python、多文件修改任务。
@@ -24,7 +28,7 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 ## 非目标
 
 - 不是生产级 sandbox。
-- 没有实现 MCP、browser automation、gateway adapters、cron、完整 provider fallback orchestration。
+- 没有实现完整 MCP server、browser automation、gateway adapters、常驻 cron daemon、完整 provider fallback orchestration。
 - 默认权限偏宽松，适合本机实验；在不可信项目上使用前应先打开 restrictive 配置。
 
 ## 图
@@ -143,10 +147,45 @@ export SIMPLE_HERMES_COMPRESSION_THRESHOLD=40
 ```text
 history
 recall active_items
+recall_all active_items
 sessions
 lineage
 descendants
 ```
+
+## Skills、Cron 与 MCP-like 导出
+
+这三块目前是第一版本地能力，不是完整 Hermes 复刻。
+
+Skills 存在 `~/.simple_hermes_codex/skills/`，也可以通过 `SIMPLE_HERMES_SKILLS_DIR` 改位置：
+
+```text
+skills create code-review ::: 先列主要问题，再给简短修改建议
+skills list
+skills view code-review
+skills use code-review
+```
+
+Cron jobs 存在 `~/.simple_hermes_codex/cron_jobs.json`，也可以通过 `SIMPLE_HERMES_CRON_PATH` 改位置。当前没有内置常驻 daemon，外部定时调用 `cron run-due` 即可触发到期任务：
+
+```text
+cron add nightly-check every 86400 ::: tool:run_tests
+cron list
+cron run-due
+cron run <id>
+cron delete <id>
+```
+
+MCP-like 导出先提供 JSON 资源形态，方便后续接真实 MCP server：
+
+```text
+mcp resources
+mcp sessions
+mcp session <session-id>
+mcp search active_items
+```
+
+`mcp session` 和 `mcp search` 会对常见 `api_key/token/secret/password` 形态和 `sk-...` token 做脱敏。这个保护不替代敏感文件权限配置；如果不希望 agent 读取敏感文件，应同时启用 restricted profile。
 
 ## 后台任务
 
@@ -182,6 +221,12 @@ remember project uses sqlite
 remember_user I prefer concise review drafts
 delegate read README.md
 parallel_delegate read README.md ; summarize this project
+recall_all sqlite
+skills list
+cron list
+mcp resources
+dependency_scan
+credential_audit
 ```
 
 ## CLI 快捷命令

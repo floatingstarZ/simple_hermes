@@ -254,7 +254,14 @@ class SimpleAgent:
             ("lineage", "lineage"),
             ("sessions", "sessions"),
             ("descendants", "descendants"),
+            ("recall_all ", "recall_all"),
             ("recall ", "recall"),
+            ("skills ", "skills"),
+            ("skills", "skills"),
+            ("cron ", "cron"),
+            ("cron", "cron"),
+            ("mcp ", "mcp"),
+            ("mcp", "mcp"),
             ("background ", "background"),
             ("read_lines ", "read_lines"),
             ("read ", "read"),
@@ -269,6 +276,9 @@ class SimpleAgent:
             ("search ", "search"),
             ("parallel_delegate ", "parallel_delegate"),
             ("delegate ", "delegate"),
+            ("fetch_url ", "fetch_url"),
+            ("dependency_scan", "dependency_scan"),
+            ("credential_audit", "credential_audit"),
             ("summarize", "summarize"),
             ("help", "help"),
         ]
@@ -286,7 +296,9 @@ class SimpleAgent:
             "help, remember <text>, remember_user <text>, memories, user_memories, history, recall <query>, read <file>, tree [path] [depth], "
             "terminal <command>, run_tests [unittest args], write_file <path> <content>, "
             "patch_file <path> ::: <target> ::: <replacement>, read_lines <path> <start> <end>, "
-            "glob <pattern>, project_overview, diff [path], background <start|list|status|tail|wait|stop>, search <query>, summarize"
+            "glob <pattern>, project_overview, diff [path], background <start|list|status|tail|wait|stop>, "
+            "skills <list|view|use|create>, cron <add|list|run-due|run|delete>, recall_all <query>, mcp <resources|sessions|session|search>, "
+            "fetch_url <url>, dependency_scan, credential_audit, search <query>, summarize"
         )
 
     def _backend_history_text(self, limit: int = 12) -> str:
