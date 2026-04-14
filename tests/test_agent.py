@@ -432,6 +432,24 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("argument=README.md", result.trace[0].content)
         self.assertEqual(result.trace[1].kind, "tool_result")
 
+    def test_agent_run_streams_trace_steps(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="use read", tool_call=ToolCall(name="read", argument="README.md")),
+            PlannerDecision(kind="text", text="Done.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_stream_steps",
+            backend=backend,
+        )
+        streamed: list[AgentTraceStep] = []
+
+        result = agent.run("inspect readme", on_step=streamed.append)
+
+        self.assertEqual([step.kind for step in streamed], [step.kind for step in result.trace])
+        self.assertEqual([step.tool_name for step in streamed], [step.tool_name for step in result.trace])
+        self.assertTrue(any(step.kind == "tool_result" for step in streamed))
+
     def test_backend_loop_blocks_repeated_failed_tool_call(self) -> None:
         backend = FakeBackend([
             PlannerDecision(kind="tool_call", text="use missing read", tool_call=ToolCall(name="read", argument="/missing.py")),

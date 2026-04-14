@@ -5,7 +5,7 @@ import os
 import shutil
 from pathlib import Path
 
-from .agent import SimpleAgent
+from .agent import AgentTraceStep, SimpleAgent
 from .config import APP_NAME, BASE_DIR
 
 try:
@@ -121,6 +121,51 @@ def _format_trace(agent: SimpleAgent) -> str:
             preview = preview[:220] + "..."
         lines.append(f"step {item.step}: {item.kind}{tool_suffix} -> {preview}")
     return _panel("Last trace", "\n".join(lines), color=YELLOW)
+
+
+def _preview_step_content(content: str, limit: int = 180) -> str:
+    preview = " ".join(content.replace("\n", " ").split())
+    if len(preview) > limit:
+        return preview[: max(0, limit - 3)] + "..."
+    return preview
+
+
+def _step_color(kind: str) -> str:
+    if "error" in kind:
+        return RED
+    if "blocked" in kind:
+        return YELLOW
+    if kind == "tool_result":
+        return GREEN
+    if kind == "tool_call":
+        return CYAN
+    if kind == "text":
+        return GREEN
+    if kind.startswith("task_frame"):
+        return MAGENTA
+    return DIM
+
+
+def _format_stream_step(item: AgentTraceStep) -> str:
+    tool_suffix = f" [{item.tool_name}]" if item.tool_name else ""
+    preview = _preview_step_content(item.content)
+    color = _step_color(item.kind)
+    label = f"step {item.step:02d} · {item.kind}{tool_suffix}"
+    if preview:
+        return f"{DIM}│{RESET} {color}{label}{RESET} {DIM}{preview}{RESET}"
+    return f"{DIM}│{RESET} {color}{label}{RESET}"
+
+
+def _stream_start(mode: str) -> None:
+    print(f"{DIM}┌─ progress · {mode}{RESET}", flush=True)
+
+
+def _stream_step(item: AgentTraceStep) -> None:
+    print(_format_stream_step(item), flush=True)
+
+
+def _stream_end() -> None:
+    print(f"{DIM}└─ done{RESET}", flush=True)
 
 
 def _clear_screen() -> None:
@@ -258,8 +303,9 @@ def main() -> None:
             print()
             continue
 
-        print(f"{DIM}· thinking...{RESET}")
-        result = agent.run(message)
+        _stream_start(mode)
+        result = agent.run(message, on_step=_stream_step)
+        _stream_end()
         agent.last_trace = result.trace
         title = f"Assistant · {mode}"
         print(_panel(title, result.final_response, color=GREEN if result.tool_used else CYAN))

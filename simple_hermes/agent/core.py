@@ -7,7 +7,7 @@ import os
 import re
 import time
 import uuid
-from typing import Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor
 
 from simple_hermes.agent.backend import LLMBackend, PlannerDecision, ToolCall, backend_from_env
@@ -796,15 +796,20 @@ class SimpleAgent:
     def _record_assistant_text(self, text: str) -> None:
         self.sessions.append("assistant", text, session_id=self.session_id, kind="assistant_text")
 
-    def _run_passive_project_diagnosis(self, message: str) -> AgentResponse:
+    def _run_passive_project_diagnosis(self, message: str, on_step: Callable[[AgentTraceStep], None] | None = None) -> AgentResponse:
         trace: List[AgentTraceStep] = []
         observations: List[str] = []
 
+        def emit(item: AgentTraceStep) -> None:
+            trace.append(item)
+            if on_step is not None:
+                on_step(item)
+
         def run_tool(step: int, name: str, argument: str, reason: str) -> str:
-            trace.append(AgentTraceStep(step=step, kind="tool_call", content=f"{reason} | argument={argument}", tool_name=name))
+            emit(AgentTraceStep(step=step, kind="tool_call", content=f"{reason} | argument={argument}", tool_name=name))
             result = self.tools.run(name, argument)
             self._record_tool_result(name, result)
-            trace.append(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=name))
+            emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=name))
             observations.append(self._compact_observation(name, argument, result))
             return result
 
@@ -849,37 +854,43 @@ class SimpleAgent:
             + "\n".join(f"- {finding}" for finding in findings)
             + "\n- 我没有修改任何文件。后续如果你说“修复/修改”，我会基于这些文件继续处理。"
         )
-        trace.append(AgentTraceStep(step=step, kind="text", content=text))
+        emit(AgentTraceStep(step=step, kind="text", content=text))
         self._record_assistant_text(text)
         self._maybe_compress_history()
         return AgentResponse(final_response=text, tool_used="read" if read_results else "search", steps=step, trace=trace)
 
-    def run(self, message: str) -> AgentResponse:
+    def run(self, message: str, on_step: Callable[[AgentTraceStep], None] | None = None) -> AgentResponse:
         trace: List[AgentTraceStep] = []
+
+        def emit(item: AgentTraceStep) -> None:
+            trace.append(item)
+            if on_step is not None:
+                on_step(item)
+
         original_message, active_task, task_event = self._resolve_task_frame(message)
         self.sessions.append("user", message, session_id=self.session_id, kind="user_message")
         if original_message != message:
-            trace.append(AgentTraceStep(step=0, kind="task_frame_resolved", content=original_message))
+            emit(AgentTraceStep(step=0, kind="task_frame_resolved", content=original_message))
         elif task_event == "new_task" and active_task is not None:
-            trace.append(AgentTraceStep(step=0, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
+            emit(AgentTraceStep(step=0, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
 
         if self.backend is not None and self._wants_passive_project_diagnosis(original_message):
-            return self._run_passive_project_diagnosis(original_message)
+            return self._run_passive_project_diagnosis(original_message, on_step=on_step)
 
         if self.backend is None:
             decision = self.plan(original_message)
-            trace.append(AgentTraceStep(step=1, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
+            emit(AgentTraceStep(step=1, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
             if decision.tool_call is not None:
                 try:
                     result = self.tools.run(decision.tool_call.name, decision.tool_call.argument)
                 except Exception as e:
                     error_text = f"Tool {decision.tool_call.name} failed: {e}"
                     self._record_assistant_text(error_text)
-                    trace.append(AgentTraceStep(step=1, kind="error", content=error_text, tool_name=decision.tool_call.name))
+                    emit(AgentTraceStep(step=1, kind="error", content=error_text, tool_name=decision.tool_call.name))
                     self._maybe_compress_history()
                     return AgentResponse(final_response=error_text, tool_used=decision.tool_call.name, steps=1, trace=trace)
                 self._record_tool_result(decision.tool_call.name, result)
-                trace.append(AgentTraceStep(step=1, kind="tool_result", content=result, tool_name=decision.tool_call.name))
+                emit(AgentTraceStep(step=1, kind="tool_result", content=result, tool_name=decision.tool_call.name))
                 if decision.tool_call.name == "read" and self._should_short_circuit_file_explanation(original_message):
                     result = self._rule_based_file_explanation(original_message, result)
                     self._record_assistant_text(result)
@@ -909,34 +920,34 @@ class SimpleAgent:
                 if last_tool_used is not None and last_text:
                     fallback_text = f"{last_text}\n\nBackend planning failed after the tool result: {e}"
                     self._record_assistant_text(fallback_text)
-                    trace.append(AgentTraceStep(step=step, kind="backend_error_fallback", content=fallback_text, tool_name=last_tool_used))
+                    emit(AgentTraceStep(step=step, kind="backend_error_fallback", content=fallback_text, tool_name=last_tool_used))
                     self._maybe_compress_history()
                     return AgentResponse(final_response=fallback_text, tool_used=last_tool_used, steps=step, trace=trace)
                 error_text = f"Backend planning failed: {e}"
                 self._record_assistant_text(error_text)
-                trace.append(AgentTraceStep(step=step, kind="backend_error", content=error_text))
+                emit(AgentTraceStep(step=step, kind="backend_error", content=error_text))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
-            trace.append(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
+            emit(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
             if decision.tool_call is None:
                 if self._needs_code_change(original_message) and not successful_edit:
                     self._set_active_task_status("in_progress")
                     recovery_message = self._premature_text_message(original_message, decision.text, run_observations)
-                    trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
+                    emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
                 if self._needs_code_change(original_message) and successful_edit and not inspected_diff:
-                    trace.append(AgentTraceStep(step=step, kind="tool_call", content="Auto-inspect diff before final text.", tool_name="diff"))
+                    emit(AgentTraceStep(step=step, kind="tool_call", content="Auto-inspect diff before final text.", tool_name="diff"))
                     result = self.tools.run("diff", "")
                     last_tool_used = "diff"
                     last_text = result
                     self._record_tool_result("diff", result)
-                    trace.append(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name="diff"))
+                    emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name="diff"))
                     run_observations.append(self._compact_observation("diff", "", result))
                     inspected_diff = self._tool_result_is_diff("diff", result)
                 if self._needs_test(original_message) and not successful_test:
                     recovery_message = self._premature_test_message(original_message, decision.text, run_observations)
-                    trace.append(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
+                    emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
                 if successful_edit:
@@ -955,7 +966,7 @@ class SimpleAgent:
                     failed_calls[call_key],
                     run_observations,
                 )
-                trace.append(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                emit(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 if blocked_repeats >= 3:
                     error_text = (
                         "Stopped because the backend repeated the same failing tool call. "
@@ -983,7 +994,7 @@ class SimpleAgent:
                         completed_inspections[inspection_key],
                         run_observations,
                     )
-                trace.append(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                emit(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 current_message = recovery_message
                 continue
 
@@ -992,13 +1003,13 @@ class SimpleAgent:
             except Exception as e:
                 error_text = f"Tool {decision.tool_call.name} failed: {e}"
                 self._record_assistant_text(error_text)
-                trace.append(AgentTraceStep(step=step, kind="tool_error", content=error_text, tool_name=decision.tool_call.name))
+                emit(AgentTraceStep(step=step, kind="tool_error", content=error_text, tool_name=decision.tool_call.name))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=error_text, tool_used=decision.tool_call.name, steps=step, trace=trace)
             last_tool_used = decision.tool_call.name
             last_text = result
             self._record_tool_result(decision.tool_call.name, result)
-            trace.append(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=decision.tool_call.name))
+            emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=decision.tool_call.name))
             run_observations.append(self._compact_observation(decision.tool_call.name, decision.tool_call.argument, result))
             if self._looks_like_failed_tool_result(result):
                 failed_calls[call_key] = result
@@ -1015,7 +1026,7 @@ class SimpleAgent:
             if decision.tool_call.name == "read" and self._should_short_circuit_file_explanation(original_message):
                 explained = self._explain_file_after_read(original_message, result)
                 self._record_assistant_text(explained)
-                trace.append(AgentTraceStep(step=step, kind="text", content=explained, tool_name=decision.tool_call.name))
+                emit(AgentTraceStep(step=step, kind="text", content=explained, tool_name=decision.tool_call.name))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=explained, tool_used=decision.tool_call.name, steps=step, trace=trace)
             current_message = self._tool_followup_message(original_message, decision.tool_call.name, result, run_observations)
@@ -1025,6 +1036,6 @@ class SimpleAgent:
             f"Last tool result was:\n{last_text}"
         )
         self._record_assistant_text(timeout_text)
-        trace.append(AgentTraceStep(step=self.max_steps, kind="text", content=timeout_text, tool_name=last_tool_used))
+        emit(AgentTraceStep(step=self.max_steps, kind="text", content=timeout_text, tool_name=last_tool_used))
         self._maybe_compress_history()
         return AgentResponse(final_response=timeout_text, tool_used=last_tool_used, steps=self.max_steps, trace=trace)
