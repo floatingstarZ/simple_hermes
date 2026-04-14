@@ -71,6 +71,8 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("read_lines", prompt)
         self.assertIn("project_overview", prompt)
         self.assertIn("diff", prompt)
+        self.assertIn("short follow-up", prompt)
+        self.assertIn("do not ask for clarification", prompt)
 
 
 class AgentPlanningTests(unittest.TestCase):
@@ -638,6 +640,85 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
         tool_names = [step.tool_name for step in result.trace if step.kind == "tool_result"]
         self.assertEqual(tool_names, ["project_overview", "glob", "read", "patch_file", "diff", "run_tests"])
+
+    def test_coding_request_blocks_clarification_and_pushes_backend_to_write(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(kind="text", text="请先说明你想要哪种版本。", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="write snake game",
+                tool_call=ToolCall(name="write_file", argument="snake.html ::: <!doctype html><title>Snake</title>"),
+            ),
+            PlannerDecision(kind="text", text="已创建 HTML 贪吃蛇。", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_snake_first_turn",
+            backend=backend,
+        )
+
+        result = agent.run("写个贪吃蛇小程序")
+
+        self.assertIn("已创建", result.final_response)
+        self.assertTrue((self.project_root / "snake.html").exists())
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+
+    def test_short_variant_followup_continues_previous_coding_request(self) -> None:
+        self.agent.sessions.append("user", "写个贪吃蛇小程序", session_id=self.agent.session_id, kind="user_message")
+        self.agent.sessions.append("assistant", "请先说明你想要哪种版本。", session_id=self.agent.session_id, kind="assistant_text")
+        backend = FakeBackend([
+            PlannerDecision(kind="text", text="下面是源码；如果你要我写入项目，请继续确认。", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="write html version",
+                tool_call=ToolCall(name="write_file", argument="snake.html ::: <!doctype html><title>Snake HTML</title>"),
+            ),
+            PlannerDecision(kind="text", text="已写入 HTML 版本。", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_snake_variant",
+            backend=backend,
+            session_store=self.agent.sessions,
+            memory_store=self.agent.memory,
+            session_id=self.agent.session_id,
+        )
+
+        result = agent.run("HTML版本")
+
+        self.assertIn("已写入", result.final_response)
+        self.assertTrue((self.project_root / "snake.html").exists())
+        self.assertIn("Previous request: 写个贪吃蛇小程序", backend.calls[0]["message"])
+        self.assertTrue(any(step.kind == "followup_expanded" for step in result.trace))
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+
+    def test_permission_followup_continues_previous_coding_request(self) -> None:
+        self.agent.sessions.append("user", "写个贪吃蛇小程序", session_id=self.agent.session_id, kind="user_message")
+        self.agent.sessions.append("assistant", "如果要我写进当前项目，请继续确认。", session_id=self.agent.session_id, kind="assistant_text")
+        backend = FakeBackend([
+            PlannerDecision(kind="text", text="我可以直接开始。", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="write snake game after permission",
+                tool_call=ToolCall(name="write_file", argument="snake.html ::: <!doctype html><title>Snake Allowed</title>"),
+            ),
+            PlannerDecision(kind="text", text="已根据许可写入。", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_snake_permission",
+            backend=backend,
+            session_store=self.agent.sessions,
+            memory_store=self.agent.memory,
+            session_id=self.agent.session_id,
+        )
+
+        result = agent.run("你做的任何操作都是允许的")
+
+        self.assertIn("已根据许可写入", result.final_response)
+        self.assertTrue((self.project_root / "snake.html").exists())
+        self.assertIn("Current follow-up permission", backend.calls[0]["message"])
+        self.assertTrue(any(step.kind == "followup_expanded" for step in result.trace))
 
     def test_backend_failure_becomes_agent_error_response(self) -> None:
         agent = self._make_agent(

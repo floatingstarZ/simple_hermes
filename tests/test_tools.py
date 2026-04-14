@@ -315,6 +315,12 @@ class ToolTests(unittest.TestCase):
         self.assertIn("Wrote file notes/todo.txt", text)
         self.assertEqual((self.project_root / "notes" / "todo.txt").read_text(encoding="utf-8"), "first task")
 
+    def test_write_file_delimiter_format_accepts_multiline_content(self) -> None:
+        text = self.tools.write_file("snake.py ::: import curses\n\nprint('snake')\n")
+        self.assertIn("Wrote file snake.py", text)
+        self.assertEqual((self.project_root / "snake.py").read_text(encoding="utf-8"), "import curses\n\nprint('snake')\n")
+        self.assertFalse((self.project_root / "snake.py ::: import curses").exists())
+
     def test_write_file_allows_absolute_path_by_default(self) -> None:
         outside = Path(self.temp_dir.name) / "external.txt"
         text = self.tools.write_file(f"{outside}\nhello")

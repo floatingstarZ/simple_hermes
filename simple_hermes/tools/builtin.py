@@ -810,7 +810,7 @@ class BuiltInTools:
 
     def write_file(self, text: str) -> str:
         usage = "Usage: write_file <path> <content> or write_file <path>\\n<content>"
-        if " ::: " in text and "\n" not in text:
+        if " ::: " in text:
             path_text, content = text.split(" ::: ", 1)
         elif "\n" in text:
             path_text, content = text.split("\n", 1)

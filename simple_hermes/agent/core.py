@@ -209,12 +209,16 @@ class SimpleAgent:
             "edit",
             "patch",
             "write code",
+            "write file",
             "新增",
             "添加",
             "创建",
             "生成",
             "修复",
             "做个",
+            "写个",
+            "写一个",
+            "写个小程序",
             "开发",
             "改代码",
             "修改",
@@ -222,6 +226,75 @@ class SimpleAgent:
             "实际改",
         )
         return any(hint in lower for hint in hints)
+
+    def _is_short_variant_followup(self, message: str) -> bool:
+        stripped = message.strip()
+        lower = stripped.lower()
+        if len(stripped) > 80:
+            return False
+        variant_hints = (
+            "html",
+            "网页",
+            "web",
+            "js",
+            "javascript",
+            "python",
+            "pygame",
+            "终端",
+            "命令行",
+            "版本",
+        )
+        return any(hint in lower for hint in variant_hints)
+
+    def _is_permission_followup(self, message: str) -> bool:
+        lower = message.strip().lower()
+        permission_hints = (
+            "任何操作都是允许",
+            "任何操作都允许",
+            "你做的任何操作",
+            "直接开始",
+            "直接做",
+            "不用问",
+            "不需要问",
+            "你决定",
+            "你来定",
+            "都可以",
+            "都行",
+            "放手做",
+            "go ahead",
+            "just do it",
+            "no need to ask",
+        )
+        return any(hint in lower for hint in permission_hints)
+
+    def _recent_user_code_request(self, history: List[dict]) -> str | None:
+        for row in reversed(history):
+            if row.get("role") != "user":
+                continue
+            content = row.get("content", "").strip()
+            if content and self._needs_code_change(content):
+                return content
+        return None
+
+    def _expand_followup_message(self, message: str, prior_history: List[dict]) -> str:
+        previous_request = self._recent_user_code_request(prior_history)
+        if previous_request is None:
+            return message
+        if self._is_short_variant_followup(message):
+            return (
+                "Continue the previous coding request using the user's selected variant.\n"
+                f"Previous request: {previous_request}\n"
+                f"Current follow-up: {message}\n"
+                "Do not ask for more confirmation. Inspect the project if needed, then create or edit the appropriate project file."
+            )
+        if self._is_permission_followup(message):
+            return (
+                "Continue and execute the previous coding request now. The user has explicitly allowed the needed operations.\n"
+                f"Previous request: {previous_request}\n"
+                f"Current follow-up permission: {message}\n"
+                "Do not answer with a permission/status-only message. Inspect the project if needed, then create or edit the appropriate project file."
+            )
+        return message
 
     def _needs_test(self, message: str) -> bool:
         lower = message.lower()
@@ -770,14 +843,17 @@ class SimpleAgent:
 
     def run(self, message: str) -> AgentResponse:
         trace: List[AgentTraceStep] = []
-        original_message = message
+        prior_history = self.sessions.history(session_id=self.session_id, limit=20)
+        original_message = self._expand_followup_message(message, prior_history)
         self.sessions.append("user", message, session_id=self.session_id, kind="user_message")
+        if original_message != message:
+            trace.append(AgentTraceStep(step=0, kind="followup_expanded", content=original_message))
 
-        if self.backend is not None and self._wants_passive_project_diagnosis(message):
-            return self._run_passive_project_diagnosis(message)
+        if self.backend is not None and self._wants_passive_project_diagnosis(original_message):
+            return self._run_passive_project_diagnosis(original_message)
 
         if self.backend is None:
-            decision = self.plan(message)
+            decision = self.plan(original_message)
             trace.append(AgentTraceStep(step=1, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
             if decision.tool_call is not None:
                 try:
@@ -802,7 +878,7 @@ class SimpleAgent:
             self._maybe_compress_history()
             return AgentResponse(final_response=decision.text, steps=1, trace=trace)
 
-        current_message = message
+        current_message = original_message
         last_tool_used: Optional[str] = None
         last_text = ""
         failed_calls: dict[tuple[str, str], str] = {}
