@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -149,6 +150,17 @@ class ToolTests(unittest.TestCase):
         self.assertIn("Likely verification commands:", text)
         self.assertIn("-m unittest discover -s tests -v", text)
 
+    def test_project_overview_reports_package_scripts(self) -> None:
+        (self.project_root / "package.json").write_text(
+            '{"scripts": {"test": "node --test", "lint": "eslint ."}}\n',
+            encoding="utf-8",
+        )
+        text = self.tools.project_overview("")
+        self.assertIn("Node/JavaScript project", text)
+        self.assertIn("npm test", text)
+        self.assertIn("Package scripts:", text)
+        self.assertIn("- test: node --test", text)
+
     def test_diff_shows_git_diff_when_project_is_git_repo(self) -> None:
         subprocess_env = os.environ.copy()
         self.tools._run_subprocess(["git", "init"], timeout=10, label="git", env=subprocess_env)
@@ -164,6 +176,38 @@ class ToolTests(unittest.TestCase):
         self.assertIn("exit code: 0", text)
         self.assertIn("+changed", text)
 
+    def test_diff_falls_back_to_in_memory_snapshot_outside_git(self) -> None:
+        target = self.project_root / "script.js"
+        target.write_text("score += 1;\n", encoding="utf-8")
+        patch_text = self.tools.patch_file("script.js ::: score += 1; ::: score += 10;")
+        self.assertIn("Patched file script.js", patch_text)
+        text = self.tools.diff("script.js")
+        self.assertIn("No git repository", text)
+        self.assertIn("-score += 1;", text)
+        self.assertIn("+score += 10;", text)
+
+    def test_diff_uses_snapshot_when_project_is_inside_parent_git_repo(self) -> None:
+        parent_file = Path(self.temp_dir.name) / "parent.txt"
+        parent_file.write_text("parent\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=self.temp_dir.name, check=True, capture_output=True)
+        subprocess.run(["git", "add", "parent.txt"], cwd=self.temp_dir.name, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "parent"],
+            cwd=self.temp_dir.name,
+            check=True,
+            capture_output=True,
+        )
+        parent_file.write_text("parent changed\n", encoding="utf-8")
+        target = self.project_root / "script.js"
+        target.write_text("score += 1;\n", encoding="utf-8")
+        self.assertIn("Patched file", self.tools.patch_file("script.js ::: score += 1; ::: score += 10;"))
+
+        text = self.tools.diff("")
+
+        self.assertIn("Project root is nested under a parent git repository", text)
+        self.assertIn("+score += 10;", text)
+        self.assertNotIn("parent changed", text)
+
     def test_run_tests_runs_default_unittest_discovery(self) -> None:
         text = self.tools.run_tests("")
         self.assertIn("exit code: 0", text)
@@ -175,6 +219,26 @@ class ToolTests(unittest.TestCase):
         self.assertIn("-m unittest discover -s tests -v", text)
         self.assertIn("test_ok", text)
         self.assertNotIn("Ran 0 tests", text)
+
+    def test_run_tests_uses_npm_for_package_json_project(self) -> None:
+        fake_bin = Path(self.temp_dir.name) / "bin"
+        fake_bin.mkdir()
+        fake_npm = fake_bin / "npm"
+        fake_npm.write_text("#!/bin/sh\necho fake npm \"$@\"\n", encoding="utf-8")
+        fake_npm.chmod(0o755)
+        (self.project_root / "package.json").write_text('{"scripts": {"test": "node --test"}}\n', encoding="utf-8")
+        tests_dir = self.project_root / "tests"
+        for child in tests_dir.iterdir():
+            child.unlink()
+        tests_dir.rmdir()
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{fake_bin}{os.pathsep}{old_path}"
+        try:
+            text = self.tools.run_tests("")
+        finally:
+            os.environ["PATH"] = old_path
+        self.assertIn("$ npm test", text)
+        self.assertIn("fake npm test", text)
 
     def test_run_tests_does_not_leak_agent_backend_env(self) -> None:
         (self.project_root / "tests" / "test_backend_env.py").write_text(
@@ -284,6 +348,14 @@ class ToolTests(unittest.TestCase):
         text = self.tools.patch_file("patch_me.txt\nabsent\n---\nnew")
         self.assertIn("Target string not found", text)
         self.assertEqual(target.read_text(encoding="utf-8"), "hello world")
+
+    def test_patch_file_reports_nearest_candidate_when_target_missing(self) -> None:
+        target = self.project_root / "patch_me.py"
+        target.write_text("def active_items(self):\n    return list(self.items)\n", encoding="utf-8")
+        text = self.tools.patch_file("patch_me.py ::: def active_item(self):\n    return list(self.items) ::: replacement")
+        self.assertIn("Target string not found", text)
+        self.assertIn("Nearest candidate snippets:", text)
+        self.assertIn("def active_items", text)
 
     def test_patch_file_replaces_unique_text(self) -> None:
         path = self.project_root / "sample.txt"

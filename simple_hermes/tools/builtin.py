@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import json
 import os
 import re
 import shlex
@@ -27,6 +29,7 @@ TERMINAL_TIMEOUT_SECONDS = 10
 RUN_TESTS_TIMEOUT_SECONDS = 30
 DEFAULT_TREE_DEPTH = 2
 DEFAULT_TEST_ARGS = ["discover", "-s", "tests", "-v"]
+EXTERNAL_TEST_COMMANDS = {"npm", "pnpm", "yarn", "cargo", "go", "pytest"}
 
 
 class BuiltInTools:
@@ -52,6 +55,7 @@ class BuiltInTools:
         self.session_id = session_id
         self.session_id_getter = session_id_getter
         self.continuity = ContinuityView(sessions)
+        self._file_snapshots: dict[str, str] = {}
         self.registry = ToolRegistry(allowed_tools=allowed_tools)
         self._register_tools()
 
@@ -206,6 +210,21 @@ class BuiltInTools:
             output.extend(["", "(no output)"])
         return self._truncate("\n".join(output))
 
+    def _test_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        for key in (
+            "SIMPLE_HERMES_BACKEND",
+            "SIMPLE_HERMES_PROVIDER",
+            "SIMPLE_HERMES_BASE_URL",
+            "SIMPLE_HERMES_API_KEY",
+            "SIMPLE_HERMES_MODEL",
+            "SIMPLE_HERMES_API_MODE",
+            "SIMPLE_HERMES_HERMES_ROOT",
+            "SIMPLE_HERMES_PROJECT_ROOT",
+        ):
+            env.pop(key, None)
+        return env
+
     def _truncate(self, text: str) -> str:
         if len(text) <= MAX_TOOL_OUTPUT_CHARS:
             return text
@@ -243,6 +262,66 @@ class BuiltInTools:
             if Path(token).name in DANGEROUS_TERMINAL_COMMANDS:
                 return f"Refusing dangerous terminal command: {Path(token).name}"
         return None
+
+    def _remember_file_snapshot(self, display_path: str, path: Path) -> None:
+        if display_path not in self._file_snapshots and path.exists() and path.is_file():
+            self._file_snapshots[display_path] = path.read_text(encoding="utf-8", errors="ignore")
+
+    def _snapshot_diff(self, display_path: str, path: Path) -> str | None:
+        if display_path not in self._file_snapshots:
+            return None
+        before = self._file_snapshots[display_path].splitlines(keepends=True)
+        after = path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+        diff = "".join(difflib.unified_diff(before, after, fromfile=f"a/{display_path}", tofile=f"b/{display_path}"))
+        return diff or f"No changes since first edit snapshot for {display_path}."
+
+    def _snapshot_diffs(self, raw: str) -> list[str]:
+        if raw:
+            path, display_path, error = self._resolve_project_path(raw)
+            if error:
+                return [error]
+            assert path is not None
+            snapshot = self._snapshot_diff(display_path, path)
+            return [] if snapshot is None else [snapshot]
+
+        snapshots: list[str] = []
+        for display_path in sorted(self._file_snapshots):
+            path = (self.project_root / display_path).resolve()
+            snapshot = self._snapshot_diff(display_path, path)
+            if snapshot:
+                snapshots.append(snapshot)
+        return snapshots
+
+    def _local_git_root(self) -> Path | None:
+        try:
+            completed = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self.project_root,
+                text=True,
+                capture_output=True,
+                timeout=TERMINAL_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if completed.returncode != 0:
+            return None
+        return Path(completed.stdout.strip()).resolve()
+
+    def _nearest_patch_candidates(self, target: str, content: str) -> list[str]:
+        target_lines = target.splitlines()
+        content_lines = content.splitlines()
+        candidates: list[tuple[float, str]] = []
+        if target_lines and content_lines:
+            window = max(1, len(target_lines))
+            for start in range(0, max(1, len(content_lines) - window + 1)):
+                snippet = "\n".join(content_lines[start : start + window])
+                score = difflib.SequenceMatcher(None, target.strip(), snippet.strip()).ratio()
+                candidates.append((score, snippet))
+        if not candidates:
+            for line in content_lines:
+                score = difflib.SequenceMatcher(None, target.strip(), line.strip()).ratio()
+                candidates.append((score, line))
+        return [snippet for score, snippet in sorted(candidates, key=lambda item: item[0], reverse=True)[:3] if score >= 0.45]
 
     def remember(self, text: str) -> str:
         return self.memory.add(text)
@@ -379,14 +458,23 @@ class BuiltInTools:
         likely_commands: List[str] = []
         if (self.project_root / "pyproject.toml").exists() or (self.project_root / "tests").is_dir():
             likely_commands.append(f"{shlex.quote(sys.executable)} -m unittest discover -s tests -v")
+        package_script_lines: list[str] = []
         if (self.project_root / "package.json").exists():
+            try:
+                package = json.loads((self.project_root / "package.json").read_text(encoding="utf-8"))
+                scripts = package.get("scripts", {}) if isinstance(package, dict) else {}
+            except Exception:
+                scripts = {}
             likely_commands.append("npm test")
+            if isinstance(scripts, dict) and scripts:
+                package_script_lines = ["Package scripts:"]
+                package_script_lines.extend(f"- {name}: {command}" for name, command in sorted(scripts.items())[:8])
         if (self.project_root / "Cargo.toml").exists():
             likely_commands.append("cargo test")
         if (self.project_root / "go.mod").exists():
             likely_commands.append("go test ./...")
 
-        lines = [
+        overview_lines = [
             f"Project root: {self.project_root}",
             "Detected markers:",
             *(found_markers or ["- none"]),
@@ -399,19 +487,39 @@ class BuiltInTools:
             "Likely verification commands:",
             *(f"- {cmd}" for cmd in (likely_commands or ["inspect project files first"])),
         ]
-        return "\n".join(lines)
+        overview_lines.extend(package_script_lines)
+        return "\n".join(overview_lines)
 
     def diff(self, text: str) -> str:
         raw = text.strip()
+        git_root = self._local_git_root()
+        snapshots = self._snapshot_diffs(raw)
+        if git_root is not None and git_root != self.project_root.resolve() and snapshots:
+            return "Project root is nested under a parent git repository; showing in-memory edit snapshot diff:\n" + "\n".join(snapshots)
+
         args = ["git", "diff", "--no-ext-diff", "--"]
         if raw:
             args.append(raw)
-        return self._run_subprocess(args, timeout=TERMINAL_TIMEOUT_SECONDS, label="diff")
+        result = self._run_subprocess(args, timeout=TERMINAL_TIMEOUT_SECONDS, label="diff")
+        if "exit code: 129" not in result and "Not a git repository" not in result:
+            return result
+        if snapshots:
+            return "No git repository; showing in-memory edit snapshot diff:\n" + "\n".join(snapshots)
+        if raw:
+            return result + "\n\nNo in-memory edit snapshot exists for this file yet."
+        return result
 
     def run_tests(self, text: str) -> str:
         raw = text.strip()
         if not raw:
-            args = [sys.executable, "-m", "unittest", *DEFAULT_TEST_ARGS]
+            if (self.project_root / "package.json").exists() and not (self.project_root / "tests").is_dir():
+                args = ["npm", "test"]
+            elif (self.project_root / "Cargo.toml").exists():
+                args = ["cargo", "test"]
+            elif (self.project_root / "go.mod").exists():
+                args = ["go", "test", "./..."]
+            else:
+                args = [sys.executable, "-m", "unittest", *DEFAULT_TEST_ARGS]
         else:
             parsed = shlex.split(raw)
             if not parsed:
@@ -420,23 +528,13 @@ class BuiltInTools:
                 args = parsed
             elif parsed[0] == "unittest":
                 args = [sys.executable, "-m", *parsed]
+            elif parsed[0] in EXTERNAL_TEST_COMMANDS:
+                args = parsed
             elif (self.project_root / parsed[0]).is_dir():
                 args = [sys.executable, "-m", "unittest", "discover", "-s", parsed[0], "-v", *parsed[1:]]
             else:
                 args = [sys.executable, "-m", "unittest", *parsed]
-        env = os.environ.copy()
-        for key in (
-            "SIMPLE_HERMES_BACKEND",
-            "SIMPLE_HERMES_PROVIDER",
-            "SIMPLE_HERMES_BASE_URL",
-            "SIMPLE_HERMES_API_KEY",
-            "SIMPLE_HERMES_MODEL",
-            "SIMPLE_HERMES_API_MODE",
-            "SIMPLE_HERMES_HERMES_ROOT",
-            "SIMPLE_HERMES_PROJECT_ROOT",
-        ):
-            env.pop(key, None)
-        return self._run_subprocess(args, timeout=RUN_TESTS_TIMEOUT_SECONDS, label="run_tests", env=env)
+        return self._run_subprocess(args, timeout=RUN_TESTS_TIMEOUT_SECONDS, label="run_tests", env=self._test_env())
 
     def terminal(self, text: str) -> str:
         command = text.strip()
@@ -481,6 +579,7 @@ class BuiltInTools:
         if error:
             return error
         assert path is not None
+        self._remember_file_snapshot(display_path, path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return f"Wrote file {display_path} ({len(content)} chars)."
@@ -513,7 +612,12 @@ class BuiltInTools:
             return f"File not found: {display_path}"
         content = path.read_text(encoding="utf-8", errors="ignore")
         if target not in content:
+            candidates = self._nearest_patch_candidates(target, content)
+            if candidates:
+                rendered = "\n---\n".join(candidates)
+                return f"Target string not found in {display_path}.\nNearest candidate snippets:\n{rendered}"
             return f"Target string not found in {display_path}."
+        self._remember_file_snapshot(display_path, path)
         updated = content.replace(target, replacement, 1)
         path.write_text(updated, encoding="utf-8")
         return f"Patched file {display_path}."

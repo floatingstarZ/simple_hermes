@@ -8,6 +8,7 @@ Each task starts from a failing test state. A successful code agent run should i
 
 - `coin-catcher-score`: JavaScript game scoring bug.
 - `todo-active-items`: Python business-logic filtering bug.
+- `invoice-discount`: Python multi-file feature change across calculation and reporting layers.
 
 ## Dry Run
 

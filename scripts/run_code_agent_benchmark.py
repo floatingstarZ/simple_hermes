@@ -36,16 +36,33 @@ class CommandResult:
         }
 
 
+def timeout_stream(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def run_command(command: list[str], cwd: Path, env: dict[str, str] | None = None, timeout: int = 180) -> CommandResult:
     started = time.time()
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return CommandResult(
+            command=command,
+            returncode=124,
+            stdout=timeout_stream(exc.stdout),
+            stderr=(timeout_stream(exc.stderr) + f"\nTimed out after {timeout}s.").strip(),
+            duration_seconds=time.time() - started,
+        )
     return CommandResult(
         command=command,
         returncode=completed.returncode,
@@ -74,6 +91,8 @@ def agent_env(task_dir: Path, session_id: str) -> dict[str, str]:
     env = os.environ.copy()
     env["SIMPLE_HERMES_PROJECT_ROOT"] = str(task_dir)
     env["SIMPLE_HERMES_SESSION_ID"] = session_id
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("SIMPLE_HERMES_MAX_STEPS", "300")
     env.setdefault("SIMPLE_HERMES_BACKEND", "hermes-runtime")
     env.setdefault("SIMPLE_HERMES_HERMES_ROOT", str(REPO_ROOT.parent / "hermes-agent"))
     return env
@@ -87,16 +106,26 @@ def run_agent(task: dict[str, Any], task_dir: Path, trace_path: Path, timeout: i
     command = ["simple_hermes_codex"]
     started = time.time()
     with trace_path.open("w", encoding="utf-8") as trace_file:
-        completed = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=env,
-            input=input_text,
-            text=True,
-            stdout=trace_file,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                env=env,
+                input=input_text,
+                text=True,
+                stdout=trace_file,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            trace_file.write(f"\n\n[BENCHMARK TIMEOUT] simple_hermes_codex timed out after {timeout}s.\n")
+            return CommandResult(
+                command=command,
+                returncode=124,
+                stdout=f"trace saved to {trace_path}",
+                stderr=f"timed out after {timeout}s",
+                duration_seconds=time.time() - started,
+            )
     return CommandResult(
         command=command,
         returncode=completed.returncode,

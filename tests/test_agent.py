@@ -5,7 +5,7 @@ from pathlib import Path
 
 from simple_hermes.agent import AgentTraceStep, PlannerDecision, SimpleAgent, ToolCall
 from simple_hermes.backend import OpenAICompatibleBackend, _detect_hermes_repo_root
-from simple_hermes.cli import _default_session_id, _detect_project_root, _detect_session_id
+from simple_hermes.cli import _default_session_id, _detect_max_steps, _detect_project_root, _detect_session_id
 from simple_hermes.agent.prompting import PromptContext, build_planner_prompt
 
 
@@ -260,6 +260,40 @@ class AgentPlanningTests(unittest.TestCase):
             self.assertEqual(_detect_session_id(self.project_root), "manual-session")
         finally:
             os.environ.pop("SIMPLE_HERMES_SESSION_ID", None)
+
+    def test_cli_reads_max_steps_from_env(self) -> None:
+        self.assertEqual(_detect_max_steps(default=90), 90)
+        os.environ["SIMPLE_HERMES_MAX_STEPS"] = "300"
+        try:
+            self.assertEqual(_detect_max_steps(default=90), 300)
+        finally:
+            os.environ.pop("SIMPLE_HERMES_MAX_STEPS", None)
+
+    def test_backend_followup_after_failed_tests_requests_repair(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="write file", tool_call=ToolCall(name="write_file", argument="notes.txt ::: done")),
+            PlannerDecision(kind="tool_call", text="run tests", tool_call=ToolCall(name="run_tests", argument="")),
+            PlannerDecision(kind="tool_call", text="patch again", tool_call=ToolCall(name="patch_file", argument="notes.txt ::: done ::: fixed")),
+            PlannerDecision(kind="tool_call", text="run tests again", tool_call=ToolCall(name="run_tests", argument="")),
+            PlannerDecision(kind="text", text="Fixed and tests passed.", tool_call=None),
+        ])
+        tests_dir = self.project_root / "tests"
+        tests_dir.mkdir(exist_ok=True)
+        (tests_dir / "test_sample.py").write_text(
+            "import unittest\n\n\nclass SampleTest(unittest.TestCase):\n"
+            "    def test_note_fixed(self):\n"
+            "        self.assertEqual(open('notes.txt', encoding='utf-8').read(), 'fixed')\n",
+            encoding="utf-8",
+        )
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_failed_test_followup",
+            backend=backend,
+        )
+        result = agent.run("please modify notes.txt and run tests")
+        self.assertIn("tests passed", result.final_response)
+        self.assertIn("The last verification command failed", backend.calls[2]["message"])
+        self.assertEqual((self.project_root / "notes.txt").read_text(encoding="utf-8"), "fixed")
 
     def test_multi_step_backend_loop_can_use_two_tools_then_answer(self) -> None:
         backend = FakeBackend([

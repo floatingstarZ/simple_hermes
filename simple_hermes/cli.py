@@ -216,9 +216,24 @@ def _detect_session_id(project_root: Path) -> str:
     return _default_session_id(project_root)
 
 
+def _detect_max_steps(default: int = 90) -> int:
+    raw = os.getenv("SIMPLE_HERMES_MAX_STEPS", "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, min(value, 1000))
+
+
 def main() -> None:
     project_root = _detect_project_root()
-    agent = SimpleAgent(project_root=project_root, session_id=_detect_session_id(project_root))
+    agent = SimpleAgent(
+        project_root=project_root,
+        session_id=_detect_session_id(project_root),
+        max_steps=_detect_max_steps(),
+    )
     mode = "real-llm" if agent.backend is not None else "rule-based"
     agent.last_trace = []
     session = _create_prompt_session()

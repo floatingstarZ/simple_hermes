@@ -16,5 +16,14 @@
     "prompt": "请把这当成一个完整任务一次性完成：先解析这个 Python todo 项目；然后修复 active_items()，让已经完成的 todo 不再出现在 active_items 结果里，但仍保留在全部 items 里；修改后运行测试验证；最后总结改了什么和测试是否通过。",
     "test_command": "python3 -m unittest discover -s tests -v",
     "expected_files": ["todo_app/core.py", "tests/test_todo.py"]
+  },
+  {
+    "id": "invoice-discount",
+    "name": "Invoice discount multi-file change",
+    "category": "python_multifile_feature",
+    "template": "fixtures/invoice_discount_sandbox_template",
+    "prompt": "请把这当成一个完整任务一次性完成：先解析这个 Python invoice 项目；然后增加折扣功能，让 total(items, discount_percent=10) 能返回打折后的总价，并让 invoice_summary(items, discount_percent=10) 返回折扣后的摘要；同时保持原有无折扣调用可用；修改后运行测试验证；最后总结改了什么和测试是否通过。",
+    "test_command": "python3 -m unittest discover -s tests -v",
+    "expected_files": ["invoice_app/operations.py", "invoice_app/report.py", "tests/test_invoice_discount.py"]
   }
 ]

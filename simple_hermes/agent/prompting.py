@@ -32,6 +32,7 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "When using patch_file from JSON, prefer a single argument string in this exact format: path ::: exact target text ::: replacement text.",
             "After reading the relevant file, move to patch_file/write_file or use read_lines/terminal for specific lines; do not repeatedly read the same file.",
             "After editing code, use diff to inspect the change and run a relevant test command before claiming completion if the user asked to verify or complete a coding task.",
+            "If a test command fails, use the failure output to patch the implementation, then rerun tests before giving a final answer.",
             "Use kind=text if no tool is appropriate.",
             "Return valid JSON only.",
         ],

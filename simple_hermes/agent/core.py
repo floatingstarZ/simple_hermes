@@ -218,12 +218,19 @@ class SimpleAgent:
         return f"- {tool_name}({rendered_arg!r}) -> {preview}"
 
     def _tool_followup_message(self, original_message: str, tool_name: str, result: str, observations: List[str]) -> str:
+        failure_hint = ""
+        if tool_name in {"run_tests", "terminal"} and "exit code: 0" not in result and self._needs_test(original_message):
+            failure_hint = (
+                "\nThe last verification command failed. Use the failure output to identify the remaining implementation gap, "
+                "patch the relevant source file, and rerun tests before giving a final answer."
+            )
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
             f"Tool {tool_name} returned:\n{result}\n\n"
             "Use the tool result to answer the user's actual request directly. "
             "Only ask for another tool if the request still cannot be answered."
+            f"{failure_hint}"
         )
 
     def _plan_tool(self, message: str) -> Tuple[Optional[str], str]:

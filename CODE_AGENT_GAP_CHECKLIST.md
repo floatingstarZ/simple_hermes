@@ -5,6 +5,7 @@ Working fixtures:
 - `fixtures/code_agent_sandbox`
 - `fixtures/game_agent_sandbox_template`
 - `fixtures/todo_cli_sandbox_template`
+- `fixtures/invoice_discount_sandbox_template`
 
 The fixture is a nested local git repo and is intentionally kept as a sandbox for end-to-end code-agent tasks. Do not push it.
 
@@ -39,10 +40,16 @@ The fixture is a nested local git repo and is intentionally kept as a sandbox fo
 - Project-scoped default CLI session ids, with `SIMPLE_HERMES_SESSION_ID` override, to avoid cross-project history contaminating code-agent traces.
 - Per-run tool-state summaries in planner follow-up messages, so the backend can use earlier project inspection, read, edit, and test results instead of only the last tool result.
 - `run_tests <directory>` now maps to `unittest discover -s <directory> -v`, avoiding false-positive `Ran 0 tests` results for common test-directory arguments.
+- `project_overview` reports `package.json` scripts so JavaScript tasks expose their likely test/lint commands.
+- `run_tests` now supports common non-unittest commands such as `npm test`, `cargo test`, `go test ./...`, and `pytest`.
+- `diff` falls back to an in-memory edit snapshot when a fixture is not a git repository.
+- `diff` also avoids leaking parent-repository diffs when benchmark workspaces live under the main repo.
+- `patch_file` reports nearest matching snippets when exact replacement text is missing.
+- A multi-file Python invoice benchmark now checks calculation and reporting edits plus no-discount compatibility.
+- The benchmark runner records timed-out agent/test commands instead of crashing and runs agents with unbuffered trace output plus `SIMPLE_HERMES_MAX_STEPS=300`.
 
 ## Next Pass Candidates
 
 - Add a small task/todo state tool for multi-step coding tasks.
-- Add a structured `project_overview` helper that reports language, package manager, and likely test commands.
-- Add patch validation that reports nearest matching text when the target is missing.
-- Add an end-to-end fixture runner that resets `fixtures/code_agent_sandbox` and captures traces automatically.
+- Add benchmark assertions for which source files changed, instead of relying only on final tests.
+- Add broader language fixtures such as TypeScript, CLI refactors, and failing lint/format tasks.
