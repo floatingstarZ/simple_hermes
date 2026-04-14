@@ -1,5 +1,7 @@
 import os
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -283,6 +285,30 @@ class ToolTests(unittest.TestCase):
         text = self.tools.terminal("python3 -c 'print(\"x\" * 4000)'")
         self.assertIn("...[truncated]...", text)
         self.assertLess(len(text), 3200)
+
+    def test_background_task_can_start_wait_and_record_completion(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'print(\"background done\")'"
+        start = self.tools.background(f"start {command}")
+        self.assertIn("Started background task bg1", start)
+
+        waited = self.tools.background("wait bg1 5")
+
+        self.assertIn("completed with exit code 0", waited)
+        self.assertIn("background done", waited)
+        listed = self.tools.background("list")
+        self.assertIn("bg1: done exit=0", listed)
+        history = self.sessions.history(limit=10)
+        self.assertTrue(any(row.get("kind") == "background_result" for row in history))
+
+    def test_background_task_refuses_dangerous_terminal_commands(self) -> None:
+        os.environ["SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL"] = "0"
+        try:
+            guarded = BuiltInTools(self.memory, self.sessions, self.project_root)
+            text = guarded.background("start rm -rf README.md")
+            self.assertIn("Refusing dangerous background command", text)
+            self.assertTrue((self.project_root / "README.md").exists())
+        finally:
+            os.environ.pop("SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL", None)
 
     def test_write_file_writes_project_relative_file(self) -> None:
         text = self.tools.write_file("notes/todo.txt first task")

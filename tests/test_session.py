@@ -81,6 +81,17 @@ class SessionStoreTests(unittest.TestCase):
         self.assertIn(child_id, descendants)
         self.assertIn(cont_id, descendants)
 
+    def test_latest_continuation_resume_ignores_child_sessions(self) -> None:
+        first_cont = self.store.create_continuation_session("default")
+        child_id = self.store.create_child_session("default", title="side task")
+        second_cont = self.store.create_continuation_session(first_cont)
+
+        self.assertEqual(self.store.latest_continuation_or_self("default"), second_cont)
+        continuation_ids = [row["id"] for row in self.store.continuation_descendants("default")]
+        self.assertIn(first_cont, continuation_ids)
+        self.assertIn(second_cont, continuation_ids)
+        self.assertNotIn(child_id, continuation_ids)
+
     def test_continuity_view_wrapper_exposes_same_session_browser(self) -> None:
         child_id = self.store.create_child_session("default", title="child task")
         cont_id = self.store.create_continuation_session(child_id)

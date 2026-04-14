@@ -681,6 +681,33 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertNotEqual(self.agent.session_id, initial_session)
         children = self.agent.sessions.child_sessions(initial_session)
         self.assertTrue(any(child["id"] == self.agent.session_id for child in children))
+        summary_rows = [
+            row for row in self.agent.sessions.history(session_id=self.agent.session_id, limit=20)
+            if row["role"] == "summary"
+        ]
+        self.assertTrue(summary_rows)
+        self.assertIn("Conversation handoff summary:", summary_rows[0]["content"])
+        self.assertIn("Goal:", summary_rows[0]["content"])
+
+    def test_agent_can_resume_latest_continuation_session(self) -> None:
+        base_dir = Path(self.temp_dir.name) / "state_resume"
+        first = self._make_agent(
+            project_root=self.project_root,
+            base_dir=base_dir,
+            session_id="project-demo",
+        )
+        for i in range(9):
+            first.run(f"remember continuation fact {i}")
+        latest = first.session_id
+
+        resumed = self._make_agent(
+            project_root=self.project_root,
+            base_dir=base_dir,
+            session_id="project-demo",
+            resume_latest_continuation=True,
+        )
+
+        self.assertEqual(resumed.session_id, latest)
 
     def test_child_agent_tool_restriction_blocks_parallel_delegate(self) -> None:
         child = self._make_agent(

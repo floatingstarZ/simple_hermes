@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import difflib
 import json
 import os
@@ -7,6 +8,8 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Callable, List
 
@@ -30,6 +33,22 @@ RUN_TESTS_TIMEOUT_SECONDS = 30
 DEFAULT_TREE_DEPTH = 2
 DEFAULT_TEST_ARGS = ["discover", "-s", "tests", "-v"]
 EXTERNAL_TEST_COMMANDS = {"npm", "pnpm", "yarn", "cargo", "go", "pytest"}
+
+
+@dataclass
+class BackgroundTask:
+    task_id: str
+    command: str
+    process: subprocess.Popen
+    started_at: float
+    session_id: str
+    output: list[str] = field(default_factory=list)
+    completed_at: float | None = None
+    returncode: int | None = None
+    completion_recorded: bool = False
+    completion_recording: bool = False
+    monitor_thread: threading.Thread | None = field(default=None, repr=False)
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 class BuiltInTools:
@@ -56,6 +75,8 @@ class BuiltInTools:
         self.session_id_getter = session_id_getter
         self.continuity = ContinuityView(sessions)
         self._file_snapshots: dict[str, str] = {}
+        self._background_tasks: dict[str, BackgroundTask] = {}
+        self._background_counter = 0
         self.registry = ToolRegistry(allowed_tools=allowed_tools)
         self._register_tools()
 
@@ -86,6 +107,11 @@ class BuiltInTools:
         self.registry.register("diff", "Show git diff for the project or a project-relative path", self.diff)
         self.registry.register("terminal", "Run a guarded shell command in the project root", self.terminal)
         self.registry.register("run_tests", "Run Python unittest targets with a safer default command", self.run_tests)
+        self.registry.register(
+            "background",
+            "Manage background shell tasks. Usage: background start <cmd> | list | status [id] | tail <id> | wait <id> [seconds] | stop <id>",
+            self.background,
+        )
         self.registry.register(
             "write_file",
             "Write or overwrite a project-relative file. Formats: path ::: content, path<space>content, or path\\ncontent.",
@@ -563,6 +589,224 @@ class BuiltInTools:
         if not completed.stdout and not completed.stderr:
             output.extend(["", "(no output)"])
         return self._truncate("\n".join(output))
+
+    def _next_background_id(self) -> str:
+        self._background_counter += 1
+        return f"bg{self._background_counter}"
+
+    def _background_status_label(self, task: BackgroundTask) -> str:
+        returncode = task.process.poll()
+        with task.lock:
+            if returncode is not None:
+                task.returncode = returncode
+                if task.completed_at is None:
+                    task.completed_at = time.time()
+            if task.returncode is None:
+                return "running"
+            return f"done exit={task.returncode}"
+
+    def _format_background_tail(self, task: BackgroundTask, line_limit: int = 20) -> str:
+        with task.lock:
+            lines = list(task.output[-line_limit:])
+        if not lines:
+            return "(no output yet)"
+        return "\n".join(lines)
+
+    def _record_background_completion(self, task: BackgroundTask, *, use_fresh_store: bool = False) -> None:
+        with task.lock:
+            if task.returncode is None or task.completion_recorded or task.completion_recording:
+                return
+            task.completion_recording = True
+            tail = "\n".join(task.output[-12:]) if task.output else "(no output yet)"
+            content = (
+                f"[background:{task.task_id}] completed with exit code {task.returncode}\n"
+                f"$ {task.command}\n"
+                f"{tail}"
+            )
+            session_id = task.session_id
+        try:
+            if use_fresh_store:
+                store = SessionStore(path=self.sessions.path)
+                try:
+                    store.append("assistant", content, session_id=session_id, kind="background_result", tool_name="background")
+                finally:
+                    store.conn.close()
+            else:
+                self.sessions.append("assistant", content, session_id=session_id, kind="background_result", tool_name="background")
+        except Exception:
+            with task.lock:
+                task.completion_recording = False
+            return
+        with task.lock:
+            task.completion_recorded = True
+            task.completion_recording = False
+
+    def _drain_background_task(self, task: BackgroundTask) -> None:
+        try:
+            if task.process.stdout is not None:
+                for line in task.process.stdout:
+                    with task.lock:
+                        task.output.append(line.rstrip("\n"))
+                        if len(task.output) > 500:
+                            task.output = task.output[-500:]
+                task.process.stdout.close()
+            returncode = task.process.wait()
+            with task.lock:
+                task.returncode = returncode
+                task.completed_at = time.time()
+            self._record_background_completion(task, use_fresh_store=True)
+        except Exception as exc:
+            with task.lock:
+                task.output.append(f"[background monitor failed: {exc}]")
+                task.returncode = task.process.poll()
+                task.completed_at = time.time()
+
+    def _background_start(self, command: str) -> str:
+        command = command.strip()
+        refusal = self._terminal_refusal_reason(command)
+        if refusal:
+            return refusal.replace("terminal", "background")
+        task_id = self._next_background_id()
+        try:
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                cwd=self.project_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=self._test_env(),
+            )
+        except Exception as exc:
+            return f"Background task failed to start: {exc}"
+        task = BackgroundTask(
+            task_id=task_id,
+            command=command,
+            process=process,
+            started_at=time.time(),
+            session_id=self._current_session_id(),
+        )
+        self._background_tasks[task_id] = task
+        thread = threading.Thread(target=self._drain_background_task, args=(task,), daemon=True)
+        task.monitor_thread = thread
+        thread.start()
+        return f"Started background task {task_id}: {command}\nUse `background status {task_id}`, `background tail {task_id}`, or `background wait {task_id}`."
+
+    def _background_list(self) -> str:
+        if not self._background_tasks:
+            return "No background tasks in this agent process."
+        lines = ["Background tasks:"]
+        for task_id, task in sorted(self._background_tasks.items()):
+            status = self._background_status_label(task)
+            elapsed = max(0.0, time.time() - task.started_at)
+            self._record_background_completion(task)
+            lines.append(f"- {task_id}: {status}, {elapsed:.1f}s, {task.command}")
+        return "\n".join(lines)
+
+    def _background_get(self, task_id: str) -> BackgroundTask | None:
+        return self._background_tasks.get(task_id.strip())
+
+    def _background_status(self, arg: str) -> str:
+        task_id = arg.strip()
+        if not task_id:
+            return self._background_list()
+        task = self._background_get(task_id)
+        if task is None:
+            return f"Unknown background task: {task_id}"
+        status = self._background_status_label(task)
+        self._record_background_completion(task)
+        elapsed = max(0.0, time.time() - task.started_at)
+        return f"{task.task_id}: {status}, {elapsed:.1f}s\n$ {task.command}"
+
+    def _background_tail(self, arg: str) -> str:
+        parts = arg.split()
+        if not parts:
+            return "Usage: background tail <id> [lines]"
+        task = self._background_get(parts[0])
+        if task is None:
+            return f"Unknown background task: {parts[0]}"
+        line_limit = 20
+        if len(parts) > 1 and parts[1].isdigit():
+            line_limit = max(1, min(int(parts[1]), 100))
+        self._background_status_label(task)
+        self._record_background_completion(task)
+        return f"{task.task_id} tail:\n" + self._format_background_tail(task, line_limit=line_limit)
+
+    def _background_wait(self, arg: str) -> str:
+        parts = arg.split()
+        if not parts:
+            return "Usage: background wait <id> [seconds]"
+        task = self._background_get(parts[0])
+        if task is None:
+            return f"Unknown background task: {parts[0]}"
+        timeout = None
+        if len(parts) > 1:
+            try:
+                timeout = max(0.1, min(float(parts[1]), 3600.0))
+            except ValueError:
+                return "Usage: background wait <id> [seconds]"
+        try:
+            returncode = task.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return f"Background task {task.task_id} is still running after {timeout}s."
+        if task.monitor_thread is not None:
+            task.monitor_thread.join(timeout=1)
+        with task.lock:
+            task.returncode = returncode
+            task.completed_at = task.completed_at or time.time()
+        self._record_background_completion(task)
+        return (
+            f"Background task {task.task_id} completed with exit code {returncode}.\n"
+            f"$ {task.command}\n"
+            + self._format_background_tail(task, line_limit=20)
+        )
+
+    def _background_stop(self, arg: str) -> str:
+        task_id = arg.strip()
+        if not task_id:
+            return "Usage: background stop <id>"
+        task = self._background_get(task_id)
+        if task is None:
+            return f"Unknown background task: {task_id}"
+        if task.process.poll() is not None:
+            self._background_status_label(task)
+            self._record_background_completion(task)
+            return f"Background task {task.task_id} is already complete."
+        task.process.terminate()
+        try:
+            returncode = task.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            task.process.kill()
+            returncode = task.process.wait(timeout=5)
+        if task.monitor_thread is not None:
+            task.monitor_thread.join(timeout=1)
+        with task.lock:
+            task.returncode = returncode
+            task.completed_at = time.time()
+            task.output.append("[terminated by background stop]")
+        self._record_background_completion(task)
+        return f"Stopped background task {task.task_id} with exit code {returncode}."
+
+    def background(self, text: str) -> str:
+        raw = text.strip()
+        if not raw:
+            return "Usage: background start <cmd> | list | status [id] | tail <id> | wait <id> [seconds] | stop <id>"
+        action, _, arg = raw.partition(" ")
+        action = action.lower()
+        if action == "start":
+            return self._background_start(arg)
+        if action in {"list", "ls"}:
+            return self._background_list()
+        if action == "status":
+            return self._background_status(arg)
+        if action == "tail":
+            return self._background_tail(arg)
+        if action == "wait":
+            return self._background_wait(arg)
+        if action == "stop":
+            return self._background_stop(arg)
+        return "Unknown background action. Use: start, list, status, tail, wait, or stop."
 
     def write_file(self, text: str) -> str:
         usage = "Usage: write_file <path> <content> or write_file <path>\\n<content>"

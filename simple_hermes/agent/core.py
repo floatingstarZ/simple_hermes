@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 import re
 from typing import Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor
@@ -52,6 +53,7 @@ class SimpleAgent:
         max_delegation_depth: int = 1,
         child_step_budget: int = 2,
         allowed_tools: set[str] | None = None,
+        resume_latest_continuation: bool = False,
     ) -> None:
         self.project_root = project_root
         self.max_steps = max_steps
@@ -74,6 +76,9 @@ class SimpleAgent:
         self.memory = memory_store if memory_store is not None else MemoryStore(memory_path=memory_path, user_path=user_path)
         self.sessions = session_store if session_store is not None else SessionStore(path=db_path)
         self.sessions.ensure_session(self.session_id)
+        if resume_latest_continuation:
+            self.session_id = self.sessions.latest_continuation_or_self(self.session_id)
+            self.sessions.ensure_session(self.session_id)
         self.backend = backend if backend is not None else backend_from_env()
         self.tools = BuiltInTools(
             self.memory,
@@ -317,6 +322,7 @@ class SimpleAgent:
             ("sessions", "sessions"),
             ("descendants", "descendants"),
             ("recall ", "recall"),
+            ("background ", "background"),
             ("read_lines ", "read_lines"),
             ("read ", "read"),
             ("tree", "tree"),
@@ -350,7 +356,7 @@ class SimpleAgent:
             "help, remember <text>, remember_user <text>, memories, user_memories, history, recall <query>, read <file>, tree [path] [depth], "
             "terminal <command>, run_tests [unittest args], write_file <path> <content>, "
             "patch_file <path> ::: <target> ::: <replacement>, read_lines <path> <start> <end>, "
-            "glob <pattern>, project_overview, diff [path], search <query>, summarize"
+            "glob <pattern>, project_overview, diff [path], background <start|list|status|tail|wait|stop>, search <query>, summarize"
         )
 
     def _backend_history_text(self, limit: int = 12) -> str:
@@ -403,17 +409,118 @@ class SimpleAgent:
 
         return PlannerDecision(kind="text", text=self._fallback_text(), tool_call=None)
 
+    def _compression_threshold(self) -> int:
+        raw = os.getenv("SIMPLE_HERMES_COMPRESSION_THRESHOLD", "").strip()
+        if not raw:
+            return 10
+        try:
+            value = int(raw)
+        except ValueError:
+            return 10
+        return max(4, min(value, 200))
+
+    def _preview_message(self, content: str, limit: int = 180) -> str:
+        preview = re.sub(r"\s+", " ", content).strip()
+        if len(preview) > limit:
+            return preview[:limit] + "..."
+        return preview
+
+    def _unique_nonempty(self, items: List[str], limit: int) -> List[str]:
+        seen = set()
+        out = []
+        for item in items:
+            cleaned = item.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            out.append(cleaned)
+            if len(out) >= limit:
+                break
+        return out
+
+    def _build_handoff_summary(self, history: List[dict]) -> str:
+        user_rows = [row for row in history if row.get("role") == "user"]
+        assistant_rows = [
+            row for row in history
+            if row.get("role") == "assistant" and row.get("kind") != "tool_result"
+        ]
+        tool_rows = [row for row in history if row.get("kind") == "tool_result"]
+        content_blob = "\n".join(row.get("content", "") for row in history)
+        file_refs = self._unique_nonempty(
+            re.findall(r"(?<![\w/.-])[\w./-]+\.(?:py|js|ts|tsx|jsx|md|json|toml|txt|html|css|yaml|yml)", content_blob),
+            limit=8,
+        )
+        constraint_hints = (
+            "must", "should", "prefer", "do not", "don't", "不要", "需要", "希望", "先", "测试", "验证"
+        )
+        constraint_rows = [
+            row for row in user_rows
+            if any(hint in row.get("content", "").lower() for hint in constraint_hints)
+        ]
+        tool_bits = [
+            f"{row.get('tool_name') or 'tool'}: {self._preview_message(row.get('content', ''), 120)}"
+            for row in tool_rows[-4:]
+        ]
+        progress_bits = [
+            self._preview_message(row.get("content", ""), 160)
+            for row in assistant_rows[-3:]
+        ]
+
+        goals = self._unique_nonempty(
+            [self._preview_message(row.get("content", ""), 160) for row in (user_rows[:1] + user_rows[-2:])],
+            limit=3,
+        )
+        constraints = self._unique_nonempty(
+            [self._preview_message(row.get("content", ""), 160) for row in constraint_rows[-4:]],
+            limit=4,
+        )
+        progress = self._unique_nonempty([*progress_bits, *tool_bits], limit=6)
+        files = file_refs or ["No specific file references captured."]
+        remaining = [self._preview_message(user_rows[-1].get("content", ""), 160)] if user_rows else ["Continue the current task."]
+
+        def section(title: str, items: List[str]) -> List[str]:
+            return [f"{title}:"] + [f"- {item}" for item in (items or ["None captured."])]
+
+        return "\n".join(
+            [
+                "Conversation handoff summary:",
+                *section("Goal", goals),
+                *section("Constraints and preferences", constraints),
+                *section("Progress so far", progress),
+                *section("Relevant files and artifacts", files[:8]),
+                *section("Remaining work", remaining),
+            ]
+        )
+
+    def _continuation_tail(self, history: List[dict], limit: int = 4) -> List[dict]:
+        tail = [
+            row for row in history
+            if row.get("role") != "summary" and row.get("kind") != "tool_result"
+        ]
+        return tail[-limit:]
+
     def _maybe_compress_history(self) -> None:
-        history = self.sessions.history(session_id=self.session_id, limit=50)
-        summary_exists = any(row["role"] == "summary" for row in history)
-        if summary_exists or len(history) <= 10:
+        history = self.sessions.history(session_id=self.session_id, limit=200)
+        last_summary_index = -1
+        for index, row in enumerate(history):
+            if row.get("role") == "summary":
+                last_summary_index = index
+        new_rows_since_summary = len(history) - last_summary_index - 1
+        if new_rows_since_summary <= self._compression_threshold():
             return
-        early = history[:6]
-        summary_bits = "; ".join(f"{row['role']}: {row['content'][:60]}" for row in early)
-        summary_text = f"Earlier conversation summary: {summary_bits}"
+        summary_text = self._build_handoff_summary(history)
+        tail = self._continuation_tail(history)
         self.sessions.append("summary", summary_text, session_id=self.session_id, kind="summary")
         continuation_id = self.sessions.create_continuation_session(self.session_id, title="continuation")
         self.sessions.append("summary", summary_text, session_id=continuation_id, kind="summary")
+        for row in tail:
+            self.sessions.append(
+                row.get("role", "assistant"),
+                row.get("content", ""),
+                session_id=continuation_id,
+                kind=row.get("kind"),
+                tool_name=row.get("tool_name"),
+            )
         self.session_id = continuation_id
 
     def _child_allowed_tools(self) -> set[str] | None:

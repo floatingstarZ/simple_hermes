@@ -131,6 +131,24 @@ class SessionStore:
             queue.extend(child["id"] for child in children)
         return seen
 
+    def continuation_descendants(self, session_id: str) -> List[Dict[str, Any]]:
+        seen: List[Dict[str, Any]] = []
+        queue = [session_id]
+        while queue:
+            parent = queue.pop(0)
+            children = self.child_sessions(parent)
+            continuations = [child for child in children if child.get("session_type") == "continuation"]
+            seen.extend(continuations)
+            queue.extend(child["id"] for child in continuations)
+        return seen
+
+    def latest_continuation_or_self(self, session_id: str) -> str:
+        self.ensure_session(session_id)
+        candidates = [self.session_info(session_id), *self.continuation_descendants(session_id)]
+        candidates = [candidate for candidate in candidates if candidate is not None]
+        latest = max(candidates, key=lambda row: row.get("created_at") or 0)
+        return latest["id"]
+
     def descendants_text(self, session_id: str) -> str:
         rows = self.descendants(session_id)
         if not rows:

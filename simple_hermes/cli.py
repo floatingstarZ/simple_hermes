@@ -216,6 +216,10 @@ def _detect_session_id(project_root: Path) -> str:
     return _default_session_id(project_root)
 
 
+def _has_explicit_session_id() -> bool:
+    return bool(os.getenv("SIMPLE_HERMES_SESSION_ID", "").strip())
+
+
 def _detect_max_steps(default: int = 90) -> int:
     raw = os.getenv("SIMPLE_HERMES_MAX_STEPS", "").strip()
     if not raw:
@@ -233,6 +237,7 @@ def main() -> None:
         project_root=project_root,
         session_id=_detect_session_id(project_root),
         max_steps=_detect_max_steps(),
+        resume_latest_continuation=not _has_explicit_session_id(),
     )
     mode = "real-llm" if agent.backend is not None else "rule-based"
     agent.last_trace = []

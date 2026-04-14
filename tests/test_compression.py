@@ -24,7 +24,9 @@ class CompressionTests(unittest.TestCase):
             self.agent.run(f"remember fact {i}")
         history_text = self.agent.sessions.history_text(limit=50)
         self.assertIn("[summary]", history_text)
-        self.assertIn("Earlier conversation summary", history_text)
+        self.assertIn("Conversation handoff summary:", history_text)
+        self.assertIn("Goal:", history_text)
+        self.assertIn("Remaining work:", history_text)
 
 
 if __name__ == "__main__":
