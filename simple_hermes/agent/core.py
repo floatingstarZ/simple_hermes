@@ -37,6 +37,21 @@ SECRET_REDACTION_PATTERNS = (
 )
 WORKFLOW_INSPECTION_BUDGET = 12
 WORKFLOW_NO_EDIT_STEP_BUDGET = 40
+WORKFLOW_POST_EDIT_INSPECTION_BUDGET = 8
+INCOMPLETE_DELIVERABLE_MARKERS = (
+    "needs completion",
+    "needs to be completed",
+    "to be completed",
+    "not final",
+    "fill later",
+    "pending completion",
+    "待补",
+    "待整理",
+    "待完善",
+    "待完成",
+    "未完成",
+    "占位",
+)
 
 
 @dataclass
@@ -919,6 +934,36 @@ class SimpleAgent:
             return self._terminal_command_has_write_hint(argument)
         return False
 
+    def _mentions_incomplete_deliverable(self, text: str) -> bool:
+        """识别交付物中的显式未完成标记。
+
+        这是进度质量判断，而不是意图路由：只有当工具输出或写入内容自己声明
+        仍然是 TODO/占位/待补全时，主循环才会继续要求补写。单独出现
+        “draft/初稿”不算未完成，因为用户可能明确要草稿。
+        """
+        lowered = text.lower()
+        if re.search(r"\b(todo|tbd|placeholder|stub|incomplete)\b", lowered):
+            return True
+        return any(marker in lowered for marker in INCOMPLETE_DELIVERABLE_MARKERS)
+
+    def _tool_call_writes_incomplete_deliverable(self, tool_name: str, argument: str, result: str) -> bool:
+        """判断刚刚写入的内容是否明显还只是占位交付物。"""
+        if tool_name in {"write_file", "patch_file"}:
+            return self._mentions_incomplete_deliverable(argument)
+        if tool_name == "terminal" and self._terminal_command_has_write_hint(argument):
+            return self._mentions_incomplete_deliverable(argument) or self._mentions_incomplete_deliverable(result)
+        return False
+
+    def _tool_result_shows_incomplete_deliverable(self, tool_name: str, argument: str, result: str, edit_already_happened: bool) -> bool:
+        """在已发生编辑后，识别后续检查是否读到了未完成交付物。"""
+        if not edit_already_happened:
+            return False
+        if tool_name in {"read", "read_lines"}:
+            return self._mentions_incomplete_deliverable(result)
+        if tool_name == "terminal" and self._terminal_is_read_only_inspection(argument):
+            return self._mentions_incomplete_deliverable(result)
+        return False
+
     def _looks_like_failed_tool_result(self, result: str) -> bool:
         """识别已知工具失败文本，用于重复调用恢复逻辑。"""
         prefixes = (
@@ -1011,6 +1056,18 @@ class SimpleAgent:
             "The next step must create or update the deliverable with write_file/patch_file, or a terminal command that clearly writes output files. "
             "Do not inspect more context, do not launch more collection jobs, and do not wait for background tasks unless a requested output file has already been written. "
             "If the evidence is incomplete, write a clearly marked draft from the current run observations."
+        )
+
+    def _post_edit_inspection_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """已写入后仍持续检查时，要求进入补写、验证或结束。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"An edit has already succeeded, but the proposed tool call {tool_name}({argument!r}) is another inspection step. "
+            f"Post-edit inspection block count in this run: {block_count}.\n"
+            "Do not keep rereading style files, raw outputs, or the same deliverable after an edit. "
+            "If the edited deliverable contains TODO/placeholder/incomplete markers, patch or rewrite it now from the collected observations. "
+            "If it is complete, move to diff/tests/final text instead of inspecting again."
         )
 
     def _background_task_id_from_argument(self, argument: str) -> str | None:
@@ -1147,6 +1204,8 @@ class SimpleAgent:
         inspection_steps_without_progress = 0
         inspection_budget_blocks = 0
         no_edit_budget_blocks = 0
+        post_edit_inspection_steps = 0
+        post_edit_budget_blocks = 0
         background_still_running_counts: dict[str, int] = {}
         requires_edit = bool(
             active_task is not None
@@ -1155,6 +1214,7 @@ class SimpleAgent:
         )
         requires_test = False
         successful_edit = False
+        deliverable_needs_completion = False
         inspected_diff = False
         successful_test = False
         for step in range(1, self.max_steps + 1):
@@ -1181,14 +1241,20 @@ class SimpleAgent:
                 active_task = self._start_active_task(message)
                 emit(AgentTraceStep(step=step, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
             emit(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
+            edit_is_complete = successful_edit and not deliverable_needs_completion
             if decision.tool_call is None:
-                if requires_edit and not successful_edit:
+                if requires_edit and not edit_is_complete:
                     self._set_active_task_status("in_progress")
                     recovery_message = self._premature_text_message(original_message, decision.text, run_observations)
+                    if deliverable_needs_completion:
+                        recovery_message += (
+                            "\n\nA previous edit appears to have written a placeholder, TODO, or incomplete deliverable. "
+                            "Do not claim completion yet; patch or rewrite the deliverable first."
+                        )
                     emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
-                if requires_edit and successful_edit and not inspected_diff:
+                if requires_edit and edit_is_complete and not inspected_diff:
                     emit(AgentTraceStep(step=step, kind="tool_call", content="Auto-inspect diff before final text.", tool_name="diff"))
                     result = self.tools.run("diff", "")
                     last_tool_used = "diff"
@@ -1202,7 +1268,7 @@ class SimpleAgent:
                     emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
-                if successful_edit:
+                if edit_is_complete:
                     self._set_active_task_status("completed")
                 self._record_assistant_text(decision.text)
                 self._maybe_compress_history()
@@ -1240,7 +1306,7 @@ class SimpleAgent:
             is_inspection_call = self._tool_call_is_inspection(decision.tool_call.name, decision.tool_call.argument)
             if (
                 requires_edit
-                and not successful_edit
+                and not edit_is_complete
                 and step >= WORKFLOW_NO_EDIT_STEP_BUDGET
                 and not self._tool_call_may_write_deliverable(decision.tool_call.name, decision.tool_call.argument)
             ):
@@ -1266,7 +1332,7 @@ class SimpleAgent:
                 continue
             if (
                 requires_edit
-                and not successful_edit
+                and not edit_is_complete
                 and is_inspection_call
                 and inspection_steps_without_progress >= WORKFLOW_INSPECTION_BUDGET
             ):
@@ -1290,9 +1356,38 @@ class SimpleAgent:
                     return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
                 current_message = recovery_message
                 continue
+            if (
+                requires_edit
+                and edit_is_complete
+                and is_inspection_call
+                and post_edit_inspection_steps >= WORKFLOW_POST_EDIT_INSPECTION_BUDGET
+            ):
+                post_edit_budget_blocks += 1
+                recovery_message = self._post_edit_inspection_budget_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    post_edit_budget_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="post_edit_inspection_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if post_edit_budget_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept proposing inspection-only tool calls after a successful edit. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "A follow-up run should patch any incomplete deliverable, run verification, or return final text."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
             if is_inspection_call and inspection_key in completed_inspections:
                 blocked_successful_inspections += 1
-                inspection_steps_without_progress += 1
+                if successful_edit and not deliverable_needs_completion:
+                    post_edit_inspection_steps += 1
+                else:
+                    inspection_steps_without_progress += 1
                 if decision.tool_call.name == "read":
                     recovery_message = self._repeated_read_message(
                         original_message,
@@ -1331,6 +1426,13 @@ class SimpleAgent:
             self._record_tool_result(decision.tool_call.name, result)
             emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=decision.tool_call.name))
             run_observations.append(self._compact_observation(decision.tool_call.name, decision.tool_call.argument, result))
+            if self._tool_result_shows_incomplete_deliverable(
+                decision.tool_call.name,
+                decision.tool_call.argument,
+                result,
+                successful_edit,
+            ):
+                deliverable_needs_completion = True
             if self._looks_like_failed_tool_result(result):
                 failed_calls[call_key] = result
             elif decision.tool_call.name == "background":
@@ -1344,21 +1446,41 @@ class SimpleAgent:
                         background_still_running_counts.pop(finished_task_id, None)
             elif decision.tool_call.name in {"write_file", "patch_file"}:
                 successful_edit = True
+                deliverable_needs_completion = self._tool_call_writes_incomplete_deliverable(
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    result,
+                )
                 inspection_steps_without_progress = 0
                 inspection_budget_blocks = 0
                 no_edit_budget_blocks = 0
+                post_edit_inspection_steps = 0
+                post_edit_budget_blocks = 0
             elif decision.tool_call.name == "terminal" and self._terminal_may_have_edited(decision.tool_call.argument, result):
                 successful_edit = True
+                deliverable_needs_completion = self._tool_call_writes_incomplete_deliverable(
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    result,
+                )
                 inspection_steps_without_progress = 0
                 inspection_budget_blocks = 0
                 no_edit_budget_blocks = 0
+                post_edit_inspection_steps = 0
+                post_edit_budget_blocks = 0
             elif self._tool_call_is_inspection(decision.tool_call.name, decision.tool_call.argument):
                 completed_inspections[inspection_key] = result
                 blocked_successful_inspections = 0
-                inspection_steps_without_progress += 1
+                if successful_edit and not deliverable_needs_completion:
+                    post_edit_inspection_steps += 1
+                else:
+                    inspection_steps_without_progress += 1
             else:
                 inspection_steps_without_progress = 0
                 inspection_budget_blocks = 0
+                if successful_edit:
+                    post_edit_inspection_steps = 0
+                    post_edit_budget_blocks = 0
             if self._tool_result_is_successful_test(decision.tool_call.name, decision.tool_call.argument, result):
                 successful_test = True
             if self._tool_result_is_diff(decision.tool_call.name, result):

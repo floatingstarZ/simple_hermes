@@ -111,6 +111,8 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("relevant SKILL.md", prompt)
         self.assertIn("Do not hardcode repository-specific tracking preferences", prompt)
         self.assertIn("project-local skills under the current repository's skills/", prompt)
+        self.assertIn("placeholder/TODO/incomplete deliverables", prompt)
+        self.assertIn("raw artifacts and a target draft", prompt)
         self.assertIn("Do not use shell redirection", prompt)
         self.assertIn("documented --output arguments", prompt)
 
@@ -678,6 +680,102 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("Stopped because the backend kept proposing non-writing tool calls", result.final_response)
         self.assertGreaterEqual(sum(1 for step in result.trace if step.kind == "no_edit_budget_blocked"), 4)
 
+    def test_backend_loop_blocks_final_text_after_placeholder_write(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write placeholder",
+                tool_call=ToolCall(name="write_file", argument="report.md ::: # Report\n\nTODO: fill later"),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="text", text="Done.", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="complete report",
+                tool_call=ToolCall(name="write_file", argument="report.md ::: # Report\n\nComplete summary from collected evidence."),
+            ),
+            PlannerDecision(kind="text", text="Completed report.md.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_placeholder_write",
+            backend=backend,
+        )
+
+        result = agent.run("complete the report and write report.md")
+
+        self.assertIn("Completed report.md", result.final_response)
+        self.assertEqual((self.project_root / "report.md").read_text(encoding="utf-8"), "# Report\n\nComplete summary from collected evidence.")
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+        self.assertTrue(any("placeholder, TODO, or incomplete" in call["message"] for call in backend.calls))
+
+    def test_placeholder_write_keeps_inspection_budget_active(self) -> None:
+        for index in range(14):
+            (self.project_root / f"raw{index}.json").write_text(f'{{"item": {index}}}', encoding="utf-8")
+        decisions = [
+            PlannerDecision(
+                kind="tool_call",
+                text="write placeholder",
+                tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\n状态：待补全正文"),
+                requires_edit=True,
+            )
+        ]
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text=f"inspect raw {index}", tool_call=ToolCall(name="read", argument=f"raw{index}.json"))
+            for index in range(14)
+        )
+        decisions.extend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write final track",
+                tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\nFinal grounded summary."),
+            ),
+            PlannerDecision(kind="text", text="Completed track.md.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_placeholder_budget",
+            backend=backend,
+        )
+
+        result = agent.run("complete the tracking workflow and write track.md")
+
+        self.assertIn("Completed track.md", result.final_response)
+        self.assertEqual((self.project_root / "track.md").read_text(encoding="utf-8"), "# Track\n\nFinal grounded summary.")
+        self.assertTrue(any(step.kind == "inspection_budget_blocked" for step in result.trace))
+
+    def test_backend_loop_blocks_post_edit_inspection_loop(self) -> None:
+        self.project_root.joinpath("report.md").write_text("# Report\n\nComplete summary.", encoding="utf-8")
+        decisions = [
+            PlannerDecision(
+                kind="tool_call",
+                text="write complete report",
+                tool_call=ToolCall(name="write_file", argument="report.md ::: # Report\n\nComplete summary."),
+                requires_edit=True,
+            )
+        ]
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text=f"inspect after edit {index}", tool_call=ToolCall(name="read", argument="report.md"))
+            for index in range(10)
+        )
+        decisions.extend([
+            PlannerDecision(kind="tool_call", text="inspect diff", tool_call=ToolCall(name="diff", argument="")),
+            PlannerDecision(kind="text", text="Report is complete.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_post_edit_inspection",
+            backend=backend,
+        )
+
+        result = agent.run("complete the report")
+
+        self.assertIn("Report is complete", result.final_response)
+        self.assertTrue(any(step.kind == "post_edit_inspection_blocked" for step in result.trace))
+        self.assertTrue(any("after an edit" in call["message"] for call in backend.calls))
+
     def test_terminal_python_read_text_counts_as_inspection_but_subprocess_does_not(self) -> None:
         read_only = "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('README.md').read_text())\nPY"
         productive = "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', 'script.py'])\nPY"
@@ -685,6 +783,10 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertTrue(self.agent._terminal_is_read_only_inspection(read_only))
         self.assertFalse(self.agent._terminal_is_read_only_inspection(productive))
         self.assertTrue(self.agent._terminal_command_has_write_hint("python3 script.py --output result.json"))
+        self.assertTrue(self.agent._mentions_incomplete_deliverable("TODO: fill later"))
+        self.assertTrue(self.agent._mentions_incomplete_deliverable("状态：待补全正文"))
+        self.assertFalse(self.agent._mentions_incomplete_deliverable("状态：初稿"))
+        self.assertFalse(self.agent._mentions_incomplete_deliverable("todo_app/core.py"))
 
     def test_normalizes_compound_tool_names_from_backend(self) -> None:
         call = self.agent._normalize_tool_call(ToolCall(name="background wait", argument="bg1 20"))
