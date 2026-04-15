@@ -71,6 +71,7 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "After editing code, use diff to inspect the change before final text. Run a relevant test command before claiming completion if the user asked to verify or complete a coding task.",
             "If a test command fails, use the failure output to patch the implementation, then rerun tests before giving a final answer.",
             "For long-running commands, use the background tool rather than blocking indefinitely.",
+            "Background tasks can deliver runtime completion events automatically. When such an event appears in run state, use it as evidence and do not wait or poll the same finished task again.",
             "For multi-part tasks with independent branches, consider delegate or parallel_delegate when available and useful.",
             "For risky or destructive actions, prefer a text answer explaining the concrete approval needed instead of attempting the action.",
             "Keep final text concise and faithful. Mention tests or checks only if they actually ran.",

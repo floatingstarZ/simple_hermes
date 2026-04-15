@@ -226,12 +226,35 @@ DailyTrack 是当前最重要的综合测试，因为它要求 agent：
 - `SimpleAgent.plan()` 在全上下文 planner call 失败后，用压缩 memory、较短 history 再试一次。
 - 新增 `scripts/diagnose_backend.py`，可分别诊断 backend、`SimpleAgent.plan()` 和 `SimpleAgent.run()`，并打印 prompt size 相关信息，但不打印密钥。
 - 修复 `run()` 首轮 planning 时 current user message 重复进入 history 的问题。
+- `20260415.6-hermes-runtime-core` 分支增加后台 completion event 注入机制，避免长任务结束后继续依赖模型轮询。
 
 重要测试结论：
 
 - 在 Codex sandbox 内直接联网会出现 `[Errno 1] Operation not permitted`，上层常表现为 `Connection error`，这不是 simple_hermes 的真实 backend 失败。
 - 有效 DailyTrack 联网测试需要在获准的外部执行路径下运行。
 - 最新完整单元测试：`test_results/unittest-20260415-105508.html`，`157 tests OK`。
+
+## 9.5 重新对齐 Hermes runtime 设计
+
+DailyTrack 端到端测试暴露了一个更根本的问题：继续给主循环叠加“别等太久”“别写空文件”这类后置提示，只是在修补症状。重新阅读 Hermes 之后，确认它稳定的关键不是更多任务关键词，而是运行时分层：
+
+- Agent loop 自己管理需要状态的工具，例如 todo、memory、session_search、delegate。
+- 后台命令注册成 process session，由 runtime 监控并在完成时通知 agent，而不是靠模型反复 wait/poll。
+- 大工具输出和长 stdout 先进入可引用的结果存储，再把摘要放进上下文。
+- session、memory、context compression 属于 continuity plane，不是附属功能。
+
+本阶段先落地其中最小但关键的一步：把后台任务完成从“模型轮询”改为“runtime event”。`BuiltInTools` 现在保留后台任务完成事件，`SimpleAgent` 在每次 planner call 之前 drain 这些事件，并把它们作为 `background_event` 注入 run state。这样长命令结束后，planner 会直接看到完成事件和 stdout tail，可以进入综合、写入或验证阶段，而不必继续调用 `background wait`。
+
+同一轮还加入了 planner 侧工具结果预览：完整工具结果仍写入 session history，但下一轮 planner prompt 只接收有界 head/tail 预览。这个改动对应 Hermes 的 tool result storage 思路，避免 pip、测试、爬虫或长 stdout 把每一轮上下文撑大，也减少后端在长失败输出后断开的概率。
+
+这不是 DailyTrack 专用能力，也没有写入任何 tracking 偏好。它对应 Hermes 的 `notify_on_complete` 思路，是通用 long-running task 机制的第一步。
+
+验证：
+
+- `test_background_completion_event_is_injected_into_next_planner_call` 覆盖后台完成事件进入下一轮 planner message。
+- `test_backend_followup_shortens_large_tool_result_for_planner` 覆盖大工具输出进入 planner 前被压缩。
+- 最新完整单元测试：`test_results/unittest-20260415-130513.html`，`161 tests OK`。
+- DailyTrack 端到端 trace：`test_results/dailytrack-agent-runs/hermes-runtime-core-after-output-budget/dailytrack_2026-04-14_20260415-130524_trace.html`。这次成功创建 `/tmp/dailytrack_sh_case_2026-04-14_20260415-130524/2026-04-14/track.md` 和 `papers.json`，并可看到多个 `background_event` 自动注入。
 
 ## 10. 当前能力边界
 

@@ -122,6 +122,24 @@ class BackendResponseParsingTests(unittest.TestCase):
             os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
         self.assertEqual(calls["count"], 2)
 
+    def test_backend_retry_helper_retries_provider_request_id_errors(self) -> None:
+        calls = {"count": 0}
+
+        def provider_error_then_ok():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError(
+                    "An error occurred while processing your request. Please include the request ID abc in your message."
+                )
+            return "ok"
+
+        os.environ["SIMPLE_HERMES_BACKEND_RETRIES"] = "1"
+        try:
+            self.assertEqual(OpenAICompatibleBackend._with_retries(provider_error_then_ok), "ok")
+        finally:
+            os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
+        self.assertEqual(calls["count"], 2)
+
     def test_backend_retry_helper_does_not_retry_parse_errors(self) -> None:
         calls = {"count": 0}
 
@@ -166,6 +184,7 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("mark it completed", prompt)
         self.assertIn("raw artifacts and a target draft", prompt)
         self.assertIn("Do not use shell redirection", prompt)
+        self.assertIn("runtime completion events", prompt)
         self.assertIn("documented --output arguments", prompt)
 
     def test_planner_system_message_pushes_autonomous_tool_use(self) -> None:
@@ -986,6 +1005,26 @@ class AgentPlanningTests(unittest.TestCase):
             )
         )
 
+    def test_background_completion_event_is_injected_into_next_planner_call(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'print(\"auto complete event\")'"
+        backend = FakeBackend([PlannerDecision(kind="text", text="Used background completion event.", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_background_event",
+            backend=backend,
+        )
+        start = agent.tools.run("background", f"start {command}")
+        self.assertIn("Started background task bg1", start)
+        waited = agent.tool_impl._background_wait("bg1 5")
+        self.assertIn("auto complete event", waited)
+
+        result = agent.run("continue from background result")
+
+        self.assertIn("Used background completion event", result.final_response)
+        self.assertTrue(any(step.kind == "background_event" for step in result.trace))
+        self.assertIn("Background process events were delivered by the runtime", backend.calls[0]["message"])
+        self.assertIn("auto complete event", backend.calls[0]["message"])
+
     def test_backend_loop_blocks_wait_after_tail_status_cycle(self) -> None:
         command = f"{shlex.quote(sys.executable)} -c 'import time; print(\"partial\", flush=True); time.sleep(5)'"
         backend = FakeBackend([
@@ -1030,6 +1069,35 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("- project_overview('') ->", last_message)
         self.assertIn("- read('notes.txt') ->", last_message)
         self.assertIn("- patch_file('notes.txt ::: old ::: new') -> Patched file notes.txt.", last_message)
+
+    def test_backend_followup_shortens_large_tool_result_for_planner(self) -> None:
+        large_output = "HEAD\n" + ("x" * 5000) + "\nTAIL"
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="run noisy command", tool_call=ToolCall(name="terminal", argument="python3 -c noisy")),
+            PlannerDecision(kind="text", text="Recovered from noisy command.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_large_tool_result",
+            backend=backend,
+        )
+
+        original_run = agent.tools.run
+
+        def fake_run(name: str, argument: str) -> str:
+            if name == "terminal":
+                return large_output
+            return original_run(name, argument)
+
+        agent.tools.run = fake_run
+        result = agent.run("run noisy command then summarize")
+
+        self.assertIn("Recovered from noisy command", result.final_response)
+        followup = backend.calls[-1]["message"]
+        self.assertIn("tool result shortened for planner", followup)
+        self.assertIn("HEAD", followup)
+        self.assertIn("TAIL", followup)
+        self.assertLess(len(followup), len(large_output) + 1000)
 
     def test_backend_loop_blocks_premature_text_before_code_edit(self) -> None:
         target = self.project_root / "notes.txt"

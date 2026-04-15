@@ -57,6 +57,7 @@ class BackgroundTask:
     returncode: int | None = None
     completion_recorded: bool = False
     completion_recording: bool = False
+    completion_event_delivered: bool = False
     monitor_thread: threading.Thread | None = field(default=None, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -1159,6 +1160,33 @@ class BuiltInTools:
         with task.lock:
             task.completion_recorded = True
             task.completion_recording = False
+
+    def drain_background_events(self) -> str:
+        """返回尚未交付给 agent loop 的后台完成事件。
+
+        这是 Hermes `notify_on_complete` 的精简版：后台命令由工具层监控，
+        完成事件被 agent 主循环主动 drain 并注入下一轮 planner，而不是要求
+        模型持续调用 `background wait`。同一个任务的完成事件只交付一次。
+        """
+        events: list[str] = []
+        for task_id, task in sorted(self._background_tasks.items()):
+            status = self._background_status_label(task)
+            if not status.startswith("done exit="):
+                continue
+            self._record_background_completion(task)
+            with task.lock:
+                if task.completion_event_delivered:
+                    continue
+                task.completion_event_delivered = True
+                exit_code = task.returncode
+                command = task.command
+                tail = "\n".join(task.output[-12:]) if task.output else "(no output yet)"
+            events.append(
+                f"[background:{task_id}] completed with exit code {exit_code}\n"
+                f"$ {command}\n"
+                f"{tail}"
+            )
+        return "\n\n".join(events)
 
     def _drain_background_task(self, task: BackgroundTask) -> None:
         try:

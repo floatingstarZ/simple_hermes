@@ -191,7 +191,7 @@ mcp search active_items
 
 ## 后台任务
 
-后台任务会在 project root 下运行受保护的 shell command，并捕获 stdout/stderr。任务完成后，结果会作为 `background_result` 写回当前 session history，之后可以通过 `history` 或 `recall` 看到。
+后台任务会在 project root 下运行受保护的 shell command，并捕获 stdout/stderr。任务完成后，结果会作为 `background_result` 写回当前 session history，之后可以通过 `history` 或 `recall` 看到。agent 主循环也会在下一次规划前自动接收完成事件，把它作为 run state 注入 planner，因此模型不需要反复 `background wait` 才能知道任务已经结束。
 
 例子：
 

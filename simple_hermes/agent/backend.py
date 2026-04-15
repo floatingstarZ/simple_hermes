@@ -75,6 +75,8 @@ class OpenAICompatibleBackend(LLMBackend):
             "temporarily",
             "reset by peer",
             "rate limit",
+            "error occurred while processing your request",
+            "request id",
             "429",
             "502",
             "503",

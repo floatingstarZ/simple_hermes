@@ -139,7 +139,7 @@ class SimpleAgent:
         self.backend = backend if backend is not None else backend_from_env()
         self._background_agent_counter = 0
         self._background_agent_tasks: dict[str, BackgroundAgentTask] = {}
-        self.tools = BuiltInTools(
+        self.tool_impl = BuiltInTools(
             self.memory,
             self.sessions,
             project_root,
@@ -149,7 +149,8 @@ class SimpleAgent:
             backend=self.backend,
             session_id=self.session_id,
             session_id_getter=lambda: self.session_id,
-        ).registry
+        )
+        self.tools = self.tool_impl.registry
 
     def _load_active_task(self) -> dict | None:
         """读取持久化的当前编码任务；遇到损坏状态时直接丢弃。"""
@@ -235,6 +236,22 @@ class SimpleAgent:
             return "Run state so far: no tool calls have completed in this run."
         return "Run state so far:\n" + "\n".join(observations[-8:])
 
+    def _background_event_message(self, original_message: str, events: str, observations: List[str]) -> str:
+        """把后台进程完成事件作为一等运行时事件交回 planner。
+
+        Hermes 的后台任务不是靠模型反复 `wait/poll` 推进，而是由 runtime
+        监控进程并在完成时通知 agent loop。这里把同样的机制压缩到
+        Simple Hermes：事件由工具层产生，主循环只负责注入上下文。
+        """
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            "Background process events were delivered by the runtime:\n"
+            f"{events}\n\n"
+            "Use these completion events as fresh evidence. Do not poll or wait for these finished background tasks again. "
+            "Proceed to the next concrete source, synthesis, write, verification, or final-answer step."
+        )
+
     def _compact_observation(self, tool_name: str, argument: str, result: str) -> str:
         """压缩单个工具结果，避免下一轮 planner prompt 过长。"""
         preview = result.replace("\n", "\\n")
@@ -244,6 +261,25 @@ class SimpleAgent:
         if len(rendered_arg) > 160:
             rendered_arg = rendered_arg[:160] + "...[truncated]"
         return f"- {tool_name}({rendered_arg!r}) -> {preview}"
+
+    def _planner_tool_result(self, tool_name: str, result: str, limit: int = 3500) -> str:
+        """给下一轮 planner 的工具结果预览。
+
+        Hermes 会把过大的工具输出落盘，并只把 preview + 引用放回上下文。
+        Simple Hermes 目前还没有完整 artifact store，但同样不能把长 stdout、
+        pip 错误、测试日志全文塞进每一轮 planner prompt。完整工具结果已经通过
+        `_record_tool_result()` 存入 session history；这里给 planner 的只是决策
+        所需的有界预览。
+        """
+        if len(result) <= limit:
+            return result
+        head_limit = int(limit * 0.7)
+        tail_limit = limit - head_limit
+        return (
+            result[:head_limit]
+            + f"\n...[tool result shortened for planner; full {tool_name} result is stored in session history]...\n"
+            + result[-tail_limit:]
+        )
 
     def _tool_followup_message(self, original_message: str, tool_name: str, result: str, observations: List[str]) -> str:
         """工具调用之后构造下一轮 planner 消息。
@@ -270,7 +306,7 @@ class SimpleAgent:
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
-            f"Tool {tool_name} returned:\n{result}\n\n"
+            f"Tool {tool_name} returned:\n{self._planner_tool_result(tool_name, result)}\n\n"
             "Use the tool result to answer the user's actual request directly. "
             "Only ask for another tool if the request still cannot be answered."
             f"{failure_hint}"
@@ -565,6 +601,8 @@ class SimpleAgent:
             "timeout",
             "reset by peer",
             "temporarily",
+            "error occurred while processing your request",
+            "request id",
             "429",
             "502",
             "503",
@@ -1382,6 +1420,12 @@ class SimpleAgent:
         inspected_diff = False
         successful_test = False
         for step in range(1, self.max_steps + 1):
+            background_events = self.tool_impl.drain_background_events()
+            if background_events:
+                event_observation = self._compact_observation("background_event", "", background_events)
+                run_observations.append(event_observation)
+                emit(AgentTraceStep(step=step, kind="background_event", content=background_events, tool_name="background"))
+                current_message = self._background_event_message(original_message, background_events, run_observations)
             try:
                 decision = self.plan(current_message, allow_explicit_tools=(step == 1), exclude_latest_user_message=message)
             except Exception as e:
