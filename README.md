@@ -38,6 +38,7 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 
 - [M_docs 总览](M_docs/README.md)
 - [实现细节 Mermaid 图](M_docs/IMPLEMENTATION_DETAILS.md)
+- [改进历史](M_docs/IMPROVEMENT_HISTORY.md)
 - [总体架构](M_docs/simple-hermes-architecture.svg)
 - [请求时序](M_docs/simple-hermes-request-sequence.svg)
 - [长期会话、上下文压缩与后台任务](M_docs/simple-hermes-session-compression-background.svg)
