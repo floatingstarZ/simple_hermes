@@ -15,7 +15,7 @@ import uuid
 from urllib import request
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Callable, List
+from typing import Any, Callable, List
 
 
 from simple_hermes.agent.backend import LLMBackend
@@ -41,6 +41,8 @@ RUN_TESTS_TIMEOUT_SECONDS = 30
 DEFAULT_TREE_DEPTH = 2
 DEFAULT_TEST_ARGS = ["discover", "-s", "tests", "-v"]
 EXTERNAL_TEST_COMMANDS = {"npm", "pnpm", "yarn", "cargo", "go", "pytest"}
+TODO_STATE_KEY = "todo_list"
+VALID_TODO_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
 
 
 @dataclass
@@ -120,6 +122,11 @@ class BuiltInTools:
         self.registry.register("descendants", "List descendant sessions for the current session", self.descendants)
         self.registry.register("recall", "Search session history", self.recall)
         self.registry.register("recall_all", "Search history across all sessions", self.recall_all)
+        self.registry.register(
+            "todo",
+            "Manage a session task ledger for complex workflows. Usage: todo list | todo write <json-array> | todo add <id> <status> <content> | todo update <id> <status> [content] | todo clear",
+            self.todo,
+        )
         self.registry.register("skills", "Manage durable and project-local Markdown skills. Usage: skills list|view <name>|create <name> ::: <body>|use <name>", self.skills)
         self.registry.register("cron", "Manage scheduled tasks. Usage: cron add <name> every <seconds> ::: <text> | list | run-due | run <id> | delete <id>", self.cron)
         self.registry.register("mcp", "Export session data through a small MCP-like JSON interface. Usage: mcp resources|sessions|session <id>|search <query>", self.mcp)
@@ -457,6 +464,125 @@ class BuiltInTools:
         if not query:
             return "Usage: recall_all <query>"
         return self.sessions.search_all_text(query, limit=20)
+
+    def _load_todos(self) -> list[dict[str, str]]:
+        """读取当前会话的任务 ledger；损坏时清空，避免污染 planner。"""
+        raw = self.sessions.get_state(self._current_session_id(), TODO_STATE_KEY)
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            self.sessions.delete_state(self._current_session_id(), TODO_STATE_KEY)
+            return []
+        if not isinstance(data, list):
+            return []
+        return [self._normalize_todo(item) for item in data if isinstance(item, dict)]
+
+    def _save_todos(self, items: list[dict[str, str]]) -> None:
+        self.sessions.set_state(
+            self._current_session_id(),
+            TODO_STATE_KEY,
+            json.dumps([self._normalize_todo(item) for item in items], ensure_ascii=False),
+        )
+
+    def _normalize_todo(self, item: dict[str, Any]) -> dict[str, str]:
+        item_id = str(item.get("id") or item.get("name") or "?").strip() or "?"
+        content = str(item.get("content") or item.get("task") or item.get("description") or "(no description)").strip()
+        status = str(item.get("status") or "pending").strip().lower()
+        if status not in VALID_TODO_STATUSES:
+            status = "pending"
+        return {"id": item_id[:80], "content": content, "status": status}
+
+    def _format_todos(self, items: list[dict[str, str]]) -> str:
+        summary = {
+            "total": len(items),
+            "pending": sum(1 for item in items if item["status"] == "pending"),
+            "in_progress": sum(1 for item in items if item["status"] == "in_progress"),
+            "completed": sum(1 for item in items if item["status"] == "completed"),
+            "cancelled": sum(1 for item in items if item["status"] == "cancelled"),
+        }
+        return json.dumps({"todos": items, "summary": summary}, ensure_ascii=False, indent=2)
+
+    def todo(self, text: str) -> str:
+        """会话级任务 ledger，借鉴 Hermes/Codex 的显式 progress 机制。
+
+        这是通用工具，不包含 DailyTrack 偏好。复杂任务由 planner 自己写入
+        阶段列表，并在完成每个阶段后更新状态；主循环只负责把 ledger 注入
+        后续 prompt，减少反复读上下文和无目的扩展搜索。
+        """
+        raw = text.strip()
+        if not raw or raw.lower() in {"list", "read", "show"}:
+            return self._format_todos(self._load_todos())
+        if raw.lower() == "clear":
+            self._save_todos([])
+            return self._format_todos([])
+
+        action, _, rest = raw.partition(" ")
+        action = action.lower()
+        if action in {"write", "set", "replace"}:
+            payload = rest.strip()
+        elif raw.startswith("["):
+            payload = raw
+            action = "write"
+        else:
+            payload = ""
+
+        if action in {"write", "set", "replace"}:
+            if not payload:
+                return "Usage: todo write <json-array>"
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                return f"Invalid todo JSON: {exc}"
+            if not isinstance(data, list):
+                return "Todo JSON must be a list of {id, content, status} objects."
+            items = [self._normalize_todo(item) for item in data if isinstance(item, dict)]
+            in_progress = [item for item in items if item["status"] == "in_progress"]
+            if len(in_progress) > 1:
+                return "Only one todo item may be in_progress at a time."
+            self._save_todos(items)
+            return self._format_todos(items)
+
+        if action == "add":
+            parts = rest.split(maxsplit=2)
+            if len(parts) < 3:
+                return "Usage: todo add <id> <status> <content>"
+            item_id, status, content = parts
+            if status not in VALID_TODO_STATUSES:
+                return f"Invalid status: {status}. Use one of {sorted(VALID_TODO_STATUSES)}."
+            items = self._load_todos()
+            items.append(self._normalize_todo({"id": item_id, "status": status, "content": content}))
+            if sum(1 for item in items if item["status"] == "in_progress") > 1:
+                return "Only one todo item may be in_progress at a time."
+            self._save_todos(items)
+            return self._format_todos(items)
+
+        if action == "update":
+            parts = rest.split(maxsplit=2)
+            if len(parts) < 2:
+                return "Usage: todo update <id> <status> [content]"
+            item_id, status = parts[0], parts[1].lower()
+            content = parts[2] if len(parts) > 2 else None
+            if status not in VALID_TODO_STATUSES:
+                return f"Invalid status: {status}. Use one of {sorted(VALID_TODO_STATUSES)}."
+            items = self._load_todos()
+            found = False
+            for item in items:
+                if item["id"] == item_id:
+                    item["status"] = status
+                    if content:
+                        item["content"] = content
+                    found = True
+                    break
+            if not found:
+                items.append(self._normalize_todo({"id": item_id, "status": status, "content": content or "(no description)"}))
+            if sum(1 for item in items if item["status"] == "in_progress") > 1:
+                return "Only one todo item may be in_progress at a time."
+            self._save_todos(items)
+            return self._format_todos(items)
+
+        return "Usage: todo list | todo write <json-array> | todo add <id> <status> <content> | todo update <id> <status> [content] | todo clear"
 
     def _safe_skill_name(self, raw: str) -> str | None:
         name = raw.strip().replace(" ", "-")

@@ -58,6 +58,7 @@ class ToolTests(unittest.TestCase):
         self.assertIn("skills", text)
         self.assertIn("cron", text)
         self.assertIn("mcp", text)
+        self.assertIn("todo", text)
         self.assertIn("fetch_url", text)
         self.assertIn("credential_audit", text)
         self.assertIn("path ::: exact target", text)
@@ -133,6 +134,32 @@ class ToolTests(unittest.TestCase):
         self.assertIn("Saved user memory", text)
         listed = self.tools.user_memories("")
         self.assertIn("user likes concise replies", listed)
+
+    def test_todo_write_update_and_session_state(self) -> None:
+        text = self.tools.todo(
+            'write [{"id":"read","content":"Read project instructions","status":"in_progress"},'
+            '{"id":"write","content":"Write the deliverable","status":"pending"}]'
+        )
+        self.assertIn('"total": 2', text)
+        self.assertIn('"in_progress": 1', text)
+
+        self.tools.todo("update read completed")
+        updated = self.tools.todo("update write in_progress")
+        self.assertIn('"completed": 1', updated)
+        self.assertIn('"in_progress": 1', updated)
+        self.assertIn("Write the deliverable", updated)
+
+        persisted = BuiltInTools(self.memory, self.sessions, self.project_root)
+        listed = persisted.todo("list")
+        self.assertIn("Read project instructions", listed)
+        self.assertIn("Write the deliverable", listed)
+        self.assertIn("in_progress", listed)
+
+        rejected = self.tools.todo(
+            'write [{"id":"a","content":"A","status":"in_progress"},'
+            '{"id":"b","content":"B","status":"in_progress"}]'
+        )
+        self.assertIn("Only one todo item may be in_progress", rejected)
 
     def test_restricted_tool_registry_blocks_disallowed_tools(self) -> None:
         limited_tools = BuiltInTools(self.memory, self.sessions, self.project_root, allowed_tools={"help", "summarize"})

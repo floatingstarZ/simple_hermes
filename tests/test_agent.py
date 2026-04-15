@@ -112,6 +112,9 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("Do not hardcode repository-specific tracking preferences", prompt)
         self.assertIn("project-local skills under the current repository's skills/", prompt)
         self.assertIn("placeholder/TODO/incomplete deliverables", prompt)
+        self.assertIn("todo ledger", prompt)
+        self.assertIn("one phase in_progress", prompt)
+        self.assertIn("mark it completed", prompt)
         self.assertIn("raw artifacts and a target draft", prompt)
         self.assertIn("Do not use shell redirection", prompt)
         self.assertIn("documented --output arguments", prompt)
@@ -254,7 +257,11 @@ class AgentPlanningTests(unittest.TestCase):
 
     def test_backend_receives_project_instructions_and_skill_summaries_without_secrets(self) -> None:
         (self.project_root / "AGENTS.md").write_text(
-            "Treat daily track as the full repository workflow.\napi_key = sk-testsecret1234567890\n",
+            "@CLAUDE.md\nTreat daily track as the full repository workflow.\napi_key = sk-testsecret1234567890\n",
+            encoding="utf-8",
+        )
+        (self.project_root / "CLAUDE.md").write_text(
+            "Claude workflow detail from referenced instruction file.\n",
             encoding="utf-8",
         )
         (self.project_root / "MEMORY.md").write_text(
@@ -284,6 +291,8 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("Project-level context:", memory_block)
         self.assertIn("AGENTS.md", memory_block)
         self.assertIn("Treat daily track as the full repository workflow", memory_block)
+        self.assertIn("CLAUDE.md", memory_block)
+        self.assertIn("Claude workflow detail from referenced instruction file", memory_block)
         self.assertIn("MEMORY.md", memory_block)
         self.assertIn("Track date defaults to previous Beijing day", memory_block)
         self.assertIn("huggingface-papers (skills/huggingface-papers/SKILL.md)", memory_block)
@@ -291,6 +300,29 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("[REDACTED]", memory_block)
         self.assertNotIn("sk-testsecret1234567890", memory_block)
         self.assertNotIn("ghp_secretvalue1234567890", memory_block)
+
+    def test_backend_receives_workflow_todo_ledger(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="continue from ledger", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_workflow_todo",
+            backend=backend,
+        )
+        agent.tools.run(
+            "todo",
+            'write [{"id":"collect","content":"Collect source artifacts","status":"completed"},'
+            '{"id":"synth","content":"Synthesize final deliverable","status":"in_progress"},'
+            '{"id":"verify","content":"Run verification","status":"pending"}]',
+        )
+
+        agent.run("继续这个复杂任务")
+
+        memory_block = backend.calls[-1]["memory_block"]
+        self.assertIn("Current workflow todo ledger:", memory_block)
+        self.assertNotIn("Collect source artifacts", memory_block)
+        self.assertIn("[in_progress] synth: Synthesize final deliverable", memory_block)
+        self.assertIn("[pending] verify: Run verification", memory_block)
+        self.assertIn("Use the todo tool to mark completed phases", memory_block)
 
     def test_detect_hermes_repo_root_from_env(self) -> None:
         os.environ["SIMPLE_HERMES_HERMES_ROOT"] = "/tmp/hermes-root"
@@ -792,6 +824,9 @@ class AgentPlanningTests(unittest.TestCase):
         call = self.agent._normalize_tool_call(ToolCall(name="background wait", argument="bg1 20"))
         self.assertEqual(call.name, "background")
         self.assertEqual(call.argument, "wait bg1 20")
+        todo_call = self.agent._normalize_tool_call(ToolCall(name="todo update", argument="read completed"))
+        self.assertEqual(todo_call.name, "todo")
+        self.assertEqual(todo_call.argument, "update read completed")
 
     def test_background_wait_loop_helpers_detect_running_tasks(self) -> None:
         self.assertEqual(self.agent._background_task_id_from_argument("wait bg3 120"), "bg3")

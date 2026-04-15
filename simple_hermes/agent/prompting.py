@@ -44,6 +44,8 @@ def build_planner_prompt(ctx: PromptContext) -> str:
         "rules": [
             "Prefer a tool call whenever it improves grounding, progress, or verification.",
             "Do not answer from memory about live project state, file contents, git state, tests, or command output; inspect with tools.",
+            "For complex multi-step workflows, create or update a todo ledger with the todo tool before expanding broad work. Keep exactly one phase in_progress when possible.",
+            "Use the todo ledger as progress control, not as a substitute for real work: after each completed phase, call todo update to mark it completed and move the next phase to in_progress.",
             "When the user asks for a code change, file creation, app, or game, keep working toward an actual edit. Do not return status-only text before a write_file, patch_file, or editing terminal command has succeeded.",
             "Do not treat placeholder/TODO/incomplete deliverables as finished. If you write a draft that says it still needs completion, continue with a patch/write step before final text.",
             "Set requires_edit=true for any request that needs project file changes. Keep it true on later steps until the edit is complete.",

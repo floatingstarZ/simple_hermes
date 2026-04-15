@@ -15,6 +15,7 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 - 后台任务工具：`background start/list/status/tail/wait/stop`。
 - 持久化 memory：general memory 和 user profile memory 分开存。
 - SQLite 会话历史：记录 `kind`、`tool_name`、session lineage、descendants、focused recall 和 cross-session recall。
+- 通用 workflow ledger：复杂任务可用 `todo write/add/update/list/clear` 保存阶段进度，并在后续 planner prompt 中恢复 pending/in_progress 状态。
 - 长期会话：默认按 project root 生成稳定 session id，并自动恢复最新 continuation。
 - 上下文压缩：结构化 handoff summary，包含 goal、constraints、progress、files、remaining work。
 - 本地 skills 雏形：用 `skills create/view/use/list/delete` 管理 Markdown skill，并可加载到当前 session context。
@@ -222,6 +223,8 @@ remember_user I prefer concise review drafts
 delegate read README.md
 parallel_delegate read README.md ; summarize this project
 recall_all sqlite
+todo write [{"id":"inspect","content":"Inspect project instructions","status":"in_progress"}]
+todo update inspect completed
 skills list
 cron list
 mcp resources

@@ -20,13 +20,13 @@ from simple_hermes.config import (
 )
 from simple_hermes.state.memory import MemoryStore
 from simple_hermes.state.session import SessionStore
-from simple_hermes.tools.builtin import BuiltInTools
+from simple_hermes.tools.builtin import BuiltInTools, TODO_STATE_KEY
 
 INSPECTION_TOOLS = {"read", "read_lines", "tree", "glob", "project_overview", "search"}
 ACTIVE_TASK_STATE_KEY = "active_task"
 PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "MEMORY.md")
-PROJECT_CONTEXT_FILE_CHAR_LIMIT = 3500
-PROJECT_CONTEXT_TOTAL_CHAR_LIMIT = 10000
+PROJECT_CONTEXT_FILE_CHAR_LIMIT = 7000
+PROJECT_CONTEXT_TOTAL_CHAR_LIMIT = 28000
 PROJECT_SKILL_SUMMARY_LIMIT = 40
 PROJECT_SKILL_READ_CHAR_LIMIT = 2500
 SECRET_REDACTION_PATTERNS = (
@@ -294,6 +294,8 @@ class SimpleAgent:
             ("descendants", "descendants"),
             ("recall_all ", "recall_all"),
             ("recall ", "recall"),
+            ("todo ", "todo"),
+            ("todo", "todo"),
             ("skills ", "skills"),
             ("skills", "skills"),
             ("cron ", "cron"),
@@ -383,16 +385,65 @@ class SimpleAgent:
         return text
 
     def _project_instruction_excerpts(self) -> list[tuple[str, str]]:
-        """收集常见项目级 agent 指令文件的短摘录。"""
+        """收集项目级 agent 指令文件，并展开一层 `@file` 引用。
+
+        Codex/Hermes 在 DailyTrack 中表现更稳，一个关键原因是能完整看到
+        AGENTS/CLAUDE/MEMORY 这类项目契约。这里仍保持通用：只按文件引用
+        和常见指令文件加载，不写入任何具体仓库偏好。
+        """
         excerpts: list[tuple[str, str]] = []
-        for filename in PROJECT_INSTRUCTION_FILES:
-            path = self.project_root / filename
+        queue = list(PROJECT_INSTRUCTION_FILES)
+        seen: set[str] = set()
+        while queue:
+            filename = queue.pop(0)
+            if filename in seen:
+                continue
+            seen.add(filename)
+            path = (self.project_root / filename).resolve()
             if not path.is_file():
                 continue
             excerpt = self._bounded_project_file_excerpt(path)
             if excerpt:
-                excerpts.append((filename, excerpt))
+                try:
+                    rel = str(path.relative_to(self.project_root))
+                except ValueError:
+                    rel = filename
+                excerpts.append((rel, excerpt))
+                for ref in re.findall(r"(?m)^\s*@([A-Za-z0-9_./-]+\.md)\s*$", excerpt):
+                    ref_path = (path.parent / ref).resolve()
+                    try:
+                        ref_rel = str(ref_path.relative_to(self.project_root))
+                    except ValueError:
+                        continue
+                    if ref_rel not in seen:
+                        queue.append(ref_rel)
         return excerpts
+
+    def _workflow_state_text(self) -> str:
+        """把显式 todo/progress ledger 注入 planner prompt。"""
+        raw = self.sessions.get_state(self.session_id, TODO_STATE_KEY)
+        if not raw:
+            return ""
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(items, list) or not items:
+            return ""
+        active = [
+            item for item in items
+            if isinstance(item, dict) and item.get("status") in {"pending", "in_progress"}
+        ]
+        if not active:
+            return ""
+        lines = ["Current workflow todo ledger:"]
+        for item in active[:20]:
+            item_id = str(item.get("id", "?"))
+            status = str(item.get("status", "pending"))
+            content = str(item.get("content", "(no description)"))
+            lines.append(f"- [{status}] {item_id}: {content}")
+        lines.append("Use the todo tool to mark completed phases and start the next phase instead of rereading broad context.")
+        return "\n".join(lines)
 
     def _parse_project_skill_summary(self, skill_path: Path) -> tuple[str, str]:
         """从本地 skill 的 SKILL.md 抽取名称和描述。
@@ -475,6 +526,9 @@ class SimpleAgent:
         project_context = self._project_context_text().strip()
         if project_context:
             blocks.append(project_context)
+        workflow_state = self._workflow_state_text().strip()
+        if workflow_state:
+            blocks.append(workflow_state)
         return "\n\n".join(block for block in blocks if block)
 
     def plan(self, message: str, allow_explicit_tools: bool = True) -> PlannerDecision:
@@ -860,7 +914,7 @@ class SimpleAgent:
         name = call.name.strip()
         argument = call.argument.strip()
         lowered = name.lower()
-        compound_tools = {"background", "skills", "cron", "mcp"}
+        compound_tools = {"background", "skills", "cron", "mcp", "todo"}
         parts = lowered.split(maxsplit=1)
         if len(parts) == 2 and parts[0] in compound_tools:
             merged_argument = f"{parts[1]} {argument}".strip()
