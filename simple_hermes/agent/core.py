@@ -342,11 +342,21 @@ class SimpleAgent:
             "fetch_url <url>, dependency_scan, credential_audit, search <query>, summarize"
         )
 
-    def _backend_history_text(self, limit: int = 12) -> str:
+    def _backend_history_text(self, limit: int = 12, *, exclude_latest_user_message: str | None = None) -> str:
         """为后端 planner 准备最近对话上下文。"""
         rows = self.sessions.history(session_id=self.session_id, limit=limit)
         if not rows:
             return ""
+        if exclude_latest_user_message is not None:
+            # 当前轮输入已经作为 planner 的 `message` 传入；如果它又出现在
+            # recent history 中，会造成首轮 prompt 重复。DailyTrack 这类带有
+            # 大型项目指令和记忆块的任务尤其容易因此触发后端连接脆弱点。
+            target = exclude_latest_user_message.strip()
+            for index in range(len(rows) - 1, -1, -1):
+                row = rows[index]
+                if row.get("role") == "user" and row.get("kind") == "user_message" and row.get("content", "").strip() == target:
+                    rows = rows[:index] + rows[index + 1:]
+                    break
         fallback = self._fallback_text()
         lines = []
         for row in rows:
@@ -562,7 +572,13 @@ class SimpleAgent:
         )
         return any(marker in text for marker in markers)
 
-    def plan(self, message: str, allow_explicit_tools: bool = True) -> PlannerDecision:
+    def plan(
+        self,
+        message: str,
+        allow_explicit_tools: bool = True,
+        *,
+        exclude_latest_user_message: str | None = None,
+    ) -> PlannerDecision:
         """从显式命令或后端 planner 获得一个规划决策。"""
         if allow_explicit_tools:
             tool_name, arg = self._plan_tool(message)
@@ -577,7 +593,7 @@ class SimpleAgent:
                 return self.backend.plan(
                     message=message,
                     memory_block=self._backend_memory_block(),
-                    history_text=self._backend_history_text(limit=12),
+                    history_text=self._backend_history_text(limit=12, exclude_latest_user_message=exclude_latest_user_message),
                     tools_text=self.tools.help_text(),
                 )
             except Exception as exc:
@@ -592,7 +608,7 @@ class SimpleAgent:
                 return self.backend.plan(
                     message=compact_message,
                     memory_block=self._compact_backend_memory_block(),
-                    history_text=self._backend_history_text(limit=4),
+                    history_text=self._backend_history_text(limit=4, exclude_latest_user_message=exclude_latest_user_message),
                     tools_text=self.tools.help_text(),
                 )
 
@@ -1337,7 +1353,7 @@ class SimpleAgent:
         successful_test = False
         for step in range(1, self.max_steps + 1):
             try:
-                decision = self.plan(current_message, allow_explicit_tools=(step == 1))
+                decision = self.plan(current_message, allow_explicit_tools=(step == 1), exclude_latest_user_message=message)
             except Exception as e:
                 if last_tool_used is not None and last_text:
                     fallback_text = f"{last_text}\n\nBackend planning failed after the tool result: {e}"

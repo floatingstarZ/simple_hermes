@@ -304,6 +304,22 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("[user](user_message) history", call["history_text"])
         self.assertNotIn("tool_result", call["history_text"])
 
+    def test_backend_history_excludes_current_user_message_during_run(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="backend answer", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_current_history",
+            backend=backend,
+        )
+        agent.sessions.append("user", "previous context", session_id=agent.session_id, kind="user_message")
+
+        agent.run("current daily track request")
+
+        self.assertEqual(agent.sessions.last_user_message(agent.session_id), "current daily track request")
+        call = backend.calls[-1]
+        self.assertIn("[user](user_message) previous context", call["history_text"])
+        self.assertNotIn("current daily track request", call["history_text"])
+
     def test_backend_receives_project_instructions_and_skill_summaries_without_secrets(self) -> None:
         (self.project_root / "AGENTS.md").write_text(
             "@CLAUDE.md\nTreat daily track as the full repository workflow.\napi_key = sk-testsecret1234567890\n",
