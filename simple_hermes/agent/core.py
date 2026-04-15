@@ -1063,12 +1063,40 @@ class SimpleAgent:
             return True
         return any(marker in lowered for marker in INCOMPLETE_DELIVERABLE_MARKERS)
 
+    def _extract_written_deliverable_content(self, tool_name: str, argument: str) -> str | None:
+        """从写入类工具参数中抽取将被落盘的内容片段。"""
+        if tool_name == "write_file" and ":::" in argument:
+            return argument.split(":::", 1)[1].strip()
+        if tool_name == "patch_file" and ":::" in argument:
+            return argument.rsplit(":::", 1)[1].strip()
+        return None
+
+    def _looks_like_empty_deliverable_content(self, content: str | None) -> bool:
+        """识别为了绕过进度约束而写入的空交付物。
+
+        这仍然是质量状态判断，不是意图路由。典型例子是 DailyTrack 中把
+        `papers.json` 写成 `[]`，虽然文件存在，但并没有满足“写入结果”的请求。
+        """
+        if content is None:
+            return False
+        stripped = content.strip()
+        if stripped in {"", "[]", "{}", "null"}:
+            return True
+        if re.fullmatch(r"(?is)#\s*[\w -]+\s*", stripped):
+            return True
+        return False
+
     def _tool_call_writes_incomplete_deliverable(self, tool_name: str, argument: str, result: str) -> bool:
         """判断刚刚写入的内容是否明显还只是占位交付物。"""
         if tool_name in {"write_file", "patch_file"}:
-            return self._mentions_incomplete_deliverable(argument)
+            written_content = self._extract_written_deliverable_content(tool_name, argument)
+            return self._mentions_incomplete_deliverable(argument) or self._looks_like_empty_deliverable_content(written_content)
         if tool_name == "terminal" and self._terminal_command_has_write_hint(argument):
-            return self._mentions_incomplete_deliverable(argument) or self._mentions_incomplete_deliverable(result)
+            # 终端写入脚本常会包含 `if "TODO" in text` 这类清理逻辑。扫描整段
+            # command 会把“检查占位符”误判成“写入占位符”，导致已落盘的草稿
+            # 仍被 no-edit guard 当作未完成。终端写入后的未完成判断以工具输出
+            # 或后续 read/diff 观察为准。
+            return self._mentions_incomplete_deliverable(result)
         return False
 
     def _tool_result_shows_incomplete_deliverable(self, tool_name: str, argument: str, result: str, edit_already_happened: bool) -> bool:
@@ -1076,7 +1104,8 @@ class SimpleAgent:
         if not edit_already_happened:
             return False
         if tool_name in {"read", "read_lines"}:
-            return self._mentions_incomplete_deliverable(result)
+            body = result.split("\n\n", 1)[1] if "\n\n" in result else result
+            return self._mentions_incomplete_deliverable(result) or self._looks_like_empty_deliverable_content(body)
         if tool_name == "terminal" and self._terminal_is_read_only_inspection(argument):
             return self._mentions_incomplete_deliverable(result)
         return False
@@ -1172,7 +1201,8 @@ class SimpleAgent:
             f"but this run has already used many steps without a successful file edit. No-edit block count: {block_count}.\n"
             "The next step must create or update the deliverable with write_file/patch_file, or a terminal command that clearly writes output files. "
             "Do not inspect more context, do not launch more collection jobs, and do not wait for background tasks unless a requested output file has already been written. "
-            "If the evidence is incomplete, write a clearly marked draft from the current run observations."
+            "Do not write empty placeholders such as [], {}, empty headings, or skeletal files just to satisfy the edit constraint. "
+            "If the evidence is incomplete, write a clearly marked but substantive draft from the current run observations."
         )
 
     def _post_edit_inspection_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
@@ -1183,7 +1213,7 @@ class SimpleAgent:
             f"An edit has already succeeded, but the proposed tool call {tool_name}({argument!r}) is another inspection step. "
             f"Post-edit inspection block count in this run: {block_count}.\n"
             "Do not keep rereading style files, raw outputs, or the same deliverable after an edit. "
-            "If the edited deliverable contains TODO/placeholder/incomplete markers, patch or rewrite it now from the collected observations. "
+            "If the edited deliverable contains TODO/placeholder/incomplete markers, empty JSON such as []/{}, or only a skeletal heading, patch or rewrite it now from the collected observations. "
             "If it is complete, move to diff/tests/final text instead of inspecting again."
         )
 

@@ -129,19 +129,7 @@ trace_path="$TRACE_DIR/dailytrack_${safe_date}_${timestamp}_trace.txt"
 html_path="$TRACE_DIR/dailytrack_${safe_date}_${timestamp}_trace.html"
 
 cat > "$input_path" <<EOF
-开始 daily track，目标日期 ${DATE}。
-
-请你先解析本仓库的 AGENTS.md / CLAUDE.md / MEMORY.md 和 skills 工作流，然后按项目约定完成这一天的 DailyTrack。你需要自己决定该使用哪些本地 skill、脚本、网络源和中间文件。
-
-要求：
-1. 不要硬编码关键词偏好，优先遵循仓库说明和 skills。
-2. 采集 HuggingFace Daily Papers、arXiv、GitHub、HuggingFace Hub、RSS/blog/source pages 中和 LLM RL、RLVR、GRPO、agent、embodied RL、training framework 相关的内容。
-3. 对每条候选内容保留来源、日期、标题、链接、简短理由和可信度判断。
-4. 最终写入目标日期目录下的 track.md 和 papers.json；如果项目已有命名规范，请遵循已有规范。
-5. 长命令和网络采集优先使用 background，不要因为单个源超时就停止整个任务。
-6. 如果缺依赖，可以在项目局部环境里安装或创建 .venv。
-7. 完成后运行必要的检查，最后汇报写入了哪些文件、主要收录了哪些条目、哪些源失败或为空。
-
+开始 daily track，目标日期 ${DATE}。请你先解析本仓库的 AGENTS.md / CLAUDE.md / MEMORY.md 和 skills 工作流，然后按项目约定完成这一天的 DailyTrack。你需要自己决定该使用哪些本地 skill、脚本、网络源和中间文件。要求：1. 不要硬编码关键词偏好，优先遵循仓库说明和 skills。2. 采集 HuggingFace Daily Papers、arXiv、GitHub、HuggingFace Hub、RSS/blog/source pages 中和 LLM RL、RLVR、GRPO、agent、embodied RL、training framework 相关的内容。3. 对每条候选内容保留来源、日期、标题、链接、简短理由和可信度判断。4. 最终写入目标日期目录下的 track.md 和 papers.json；如果项目已有命名规范，请遵循已有规范。5. 长命令和网络采集优先使用 background，不要因为单个源超时就停止整个任务。6. 如果缺依赖，可以在项目局部环境里安装或创建 .venv。7. 完成后运行必要的检查，最后汇报写入了哪些文件、主要收录了哪些条目、哪些源失败或为空。
 /status
 /trace
 exit
@@ -172,6 +160,32 @@ echo
 set +e
 if command -v timeout >/dev/null 2>&1; then
   timeout "$TIMEOUT_SECONDS" "$COMMAND" < "$input_path" > "$trace_path" 2>&1
+elif command -v python3 >/dev/null 2>&1; then
+  python3 - "$COMMAND" "$input_path" "$trace_path" "$TIMEOUT_SECONDS" <<'PY'
+import subprocess
+import sys
+from pathlib import Path
+
+command = sys.argv[1]
+input_path = Path(sys.argv[2])
+trace_path = Path(sys.argv[3])
+timeout_seconds = int(sys.argv[4])
+
+with input_path.open("r", encoding="utf-8") as stdin, trace_path.open("w", encoding="utf-8") as stdout:
+    try:
+        completed = subprocess.run(
+            [command],
+            stdin=stdin,
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        stdout.write(f"\n[TIMEOUT] {command} exceeded {timeout_seconds}s.\n")
+        raise SystemExit(124)
+    raise SystemExit(completed.returncode)
+PY
 else
   echo "[WARN] timeout command not found; running without a hard timeout." > "$trace_path"
   "$COMMAND" < "$input_path" >> "$trace_path" 2>&1

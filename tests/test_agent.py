@@ -825,6 +825,35 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
         self.assertTrue(any("placeholder, TODO, or incomplete" in call["message"] for call in backend.calls))
 
+    def test_backend_loop_blocks_final_text_after_empty_json_write(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write empty papers",
+                tool_call=ToolCall(name="write_file", argument="papers.json ::: []"),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="text", text="Done.", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="write grounded papers",
+                tool_call=ToolCall(name="write_file", argument='papers.json ::: [{"title":"Grounded item","source":"test"}]'),
+            ),
+            PlannerDecision(kind="text", text="Completed papers.json.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_empty_json_write",
+            backend=backend,
+        )
+
+        result = agent.run("complete the daily track and write papers.json")
+
+        self.assertIn("Completed papers.json", result.final_response)
+        self.assertEqual((self.project_root / "papers.json").read_text(encoding="utf-8"), '[{"title":"Grounded item","source":"test"}]')
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+        self.assertTrue(agent._tool_call_writes_incomplete_deliverable("write_file", "papers.json ::: []", "Wrote file"))
+
     def test_placeholder_write_keeps_inspection_budget_active(self) -> None:
         for index in range(14):
             (self.project_root / f"raw{index}.json").write_text(f'{{"item": {index}}}', encoding="utf-8")
@@ -901,7 +930,13 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertTrue(self.agent._terminal_command_has_write_hint("python3 script.py --output result.json"))
         self.assertTrue(self.agent._mentions_incomplete_deliverable("TODO: fill later"))
         self.assertTrue(self.agent._mentions_incomplete_deliverable("状态：待补全正文"))
+        self.assertTrue(self.agent._looks_like_empty_deliverable_content("[]"))
+        self.assertTrue(self.agent._looks_like_empty_deliverable_content("# Track"))
+        cleanup_script = "python3 - <<'PY'\nfrom pathlib import Path\ntext = 'old TODO'\nif 'TODO' in text:\n    Path('track.md').write_text('Complete grounded draft')\nPY"
+        self.assertFalse(self.agent._tool_call_writes_incomplete_deliverable("terminal", cleanup_script, "exit code: 0"))
+        self.assertTrue(self.agent._tool_call_writes_incomplete_deliverable("terminal", "python3 script.py --output report.md", "exit code: 0\nstdout: TODO remains"))
         self.assertFalse(self.agent._mentions_incomplete_deliverable("状态：初稿"))
+        self.assertFalse(self.agent._looks_like_empty_deliverable_content("[{\"title\":\"x\"}]"))
         self.assertFalse(self.agent._mentions_incomplete_deliverable("todo_app/core.py"))
 
     def test_normalizes_compound_tool_names_from_backend(self) -> None:
