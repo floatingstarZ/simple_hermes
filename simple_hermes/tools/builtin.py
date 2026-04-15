@@ -120,7 +120,7 @@ class BuiltInTools:
         self.registry.register("descendants", "List descendant sessions for the current session", self.descendants)
         self.registry.register("recall", "Search session history", self.recall)
         self.registry.register("recall_all", "Search history across all sessions", self.recall_all)
-        self.registry.register("skills", "Manage local Markdown skills. Usage: skills list|view <name>|create <name> ::: <body>|use <name>", self.skills)
+        self.registry.register("skills", "Manage durable and project-local Markdown skills. Usage: skills list|view <name>|create <name> ::: <body>|use <name>", self.skills)
         self.registry.register("cron", "Manage scheduled tasks. Usage: cron add <name> every <seconds> ::: <text> | list | run-due | run <id> | delete <id>", self.cron)
         self.registry.register("mcp", "Export session data through a small MCP-like JSON interface. Usage: mcp resources|sessions|session <id>|search <query>", self.mcp)
         self.registry.register("read", "Read a file relative to the project root", self.read_file)
@@ -330,7 +330,7 @@ class BuiltInTools:
         """执行 shell 命令前应用本地安全策略。"""
         if not command:
             return "Usage: terminal <command>"
-        if ">" in command:
+        if ">" in command and not self.permissions.allow_dangerous_terminal:
             return "Refusing terminal command with shell redirection. Use write_file for file writes."
         if re.search(r"\bgit\s+(?:reset|clean|checkout|restore)\b", command):
             return "Refusing destructive git command."
@@ -469,15 +469,49 @@ class BuiltInTools:
     def _skill_path(self, name: str) -> Path:
         return self.skills_dir / f"{name}.md"
 
+    def _project_skill_path(self, name: str) -> Path | None:
+        """Resolve project-local skills stored as skills/<name>/SKILL.md or skills/<name>.md."""
+        candidates = [
+            self.project_root / "skills" / name / "SKILL.md",
+            self.project_root / "skills" / f"{name}.md",
+        ]
+        for path in candidates:
+            if path.is_file():
+                return path
+        return None
+
+    def _list_durable_skill_names(self) -> list[str]:
+        return sorted(path.stem for path in self.skills_dir.glob("*.md") if path.is_file())
+
+    def _list_project_skill_names(self) -> list[str]:
+        project_skills = self.project_root / "skills"
+        if not project_skills.is_dir():
+            return []
+        names: list[str] = []
+        for path in project_skills.iterdir():
+            if path.is_dir() and (path / "SKILL.md").is_file():
+                names.append(path.name)
+            elif path.is_file() and path.suffix.lower() == ".md":
+                names.append(path.stem)
+        return sorted(set(names))
+
     def skills(self, text: str) -> str:
         """本地 Markdown skill 管理入口，先实现最小可用的 procedural memory。"""
         raw = text.strip()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         if not raw or raw in {"list", "ls"}:
-            skills = sorted(path.stem for path in self.skills_dir.glob("*.md") if path.is_file())
-            if not skills:
-                return f"No local skills found in {self.skills_dir}."
-            return "Local skills:\n" + "\n".join(f"- {name}" for name in skills)
+            durable_skills = self._list_durable_skill_names()
+            project_skills = self._list_project_skill_names()
+            if not durable_skills and not project_skills:
+                return f"No local skills found in {self.skills_dir} or {self.project_root / 'skills'}."
+            lines = ["Local skills:"]
+            if durable_skills:
+                lines.append(f"Durable skills in {self.skills_dir}:")
+                lines.extend(f"- {name}" for name in durable_skills)
+            if project_skills:
+                lines.append(f"Project-local skills in {self.project_root / 'skills'}:")
+                lines.extend(f"- {name}" for name in project_skills)
+            return "\n".join(lines)
 
         action, _, rest = raw.partition(" ")
         action = action.lower()
@@ -500,19 +534,26 @@ class BuiltInTools:
             if name is None:
                 return f"Usage: skills {action} <name>"
             path = self._skill_path(name)
+            source = "durable"
+            if not path.exists():
+                project_path = self._project_skill_path(name)
+                if project_path is None:
+                    return f"Skill not found: {name}"
+                path = project_path
+                source = "project"
             if not path.exists():
                 return f"Skill not found: {name}"
             body = path.read_text(encoding="utf-8", errors="replace")
             if action == "use":
                 self.sessions.append(
                     "summary",
-                    f"[skill:{name}]\n{body}",
+                    f"[skill:{name} source={source} path={path}]\n{body}",
                     session_id=self._current_session_id(),
                     kind="skill_context",
                     tool_name="skills",
                 )
-                return f"Loaded skill into session context: {name}\n\n{self._truncate(body)}"
-            return self._truncate(f"# skill:{name}\n\n{body}")
+                return f"Loaded skill into session context ({source}): {name}\nPath: {path}\n\n{self._truncate(body)}"
+            return self._truncate(f"# skill:{name} ({source})\nPath: {path}\n\n{body}")
 
         if action in {"delete", "rm"}:
             name = self._safe_skill_name(rest)
@@ -1081,9 +1122,9 @@ class BuiltInTools:
         line_limit = 20
         if len(parts) > 1 and parts[1].isdigit():
             line_limit = max(1, min(int(parts[1]), 100))
-        self._background_status_label(task)
+        status = self._background_status_label(task)
         self._record_background_completion(task)
-        return f"{task.task_id} tail:\n" + self._format_background_tail(task, line_limit=line_limit)
+        return f"{task.task_id} tail ({status}):\n" + self._format_background_tail(task, line_limit=line_limit)
 
     def _background_wait(self, arg: str) -> str:
         parts = arg.split()
@@ -1101,7 +1142,12 @@ class BuiltInTools:
         try:
             returncode = task.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            return f"Background task {task.task_id} is still running after {timeout}s."
+            tail = self._format_background_tail(task, line_limit=8)
+            return (
+                f"Background task {task.task_id} is still running after {timeout}s.\n"
+                "Use `background tail` to harvest partial output, `background stop` if enough output exists, or proceed with another step; do not wait indefinitely.\n"
+                f"Recent output:\n{tail}"
+            )
         if task.monitor_thread is not None:
             task.monitor_thread.join(timeout=1)
         with task.lock:

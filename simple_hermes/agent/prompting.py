@@ -50,6 +50,7 @@ def build_planner_prompt(ctx: PromptContext) -> str:
             "When the current user_message contains active task state, treat it as authoritative continuity context. Continue the active task unless the message clearly starts a separate request.",
             "When the memory block contains project-level context, treat it as authoritative repository guidance. Follow instruction files such as AGENTS.md, CLAUDE.md, and MEMORY.md when present.",
             "When project-local skills are listed under skills/, inspect the relevant SKILL.md before running scripts or commands for that workflow.",
+            "The skills tool can list/view/use both durable skills and project-local skills under the current repository's skills/ directory.",
             "Do not hardcode repository-specific tracking preferences into Simple Hermes behavior. Discover preferences from the current project files and use them for this task only.",
             "If the user gives a reasonable but underspecified creation request, choose a conservative project-local implementation and proceed; do not ask for clarification when you can proceed safely. Ask a question only when the missing choice would materially change the tool call or risk unwanted side effects.",
             "Read or inspect before editing existing code. Use project_overview, tree, glob, search, read, or read_lines to find the right target.",

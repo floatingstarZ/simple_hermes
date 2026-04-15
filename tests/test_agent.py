@@ -1,4 +1,6 @@
 import os
+import shlex
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -108,6 +110,7 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("project-level context", prompt)
         self.assertIn("relevant SKILL.md", prompt)
         self.assertIn("Do not hardcode repository-specific tracking preferences", prompt)
+        self.assertIn("project-local skills under the current repository's skills/", prompt)
         self.assertIn("Do not use shell redirection", prompt)
         self.assertIn("documented --output arguments", prompt)
 
@@ -576,6 +579,165 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "new value")
         self.assertTrue(any(step.kind == "repeated_tool_blocked" for step in result.trace))
         self.assertTrue(any("Do not restart project inspection" in call["message"] for call in backend.calls))
+
+    def test_backend_loop_blocks_excessive_inspection_before_required_edit(self) -> None:
+        for index in range(20):
+            (self.project_root / f"notes{index}.txt").write_text(f"value {index}", encoding="utf-8")
+        decisions = [
+            PlannerDecision(kind="tool_call", text=f"read {index}", tool_call=ToolCall(name="read", argument=f"notes{index}.txt"), requires_edit=True)
+            for index in range(14)
+        ]
+        decisions.extend([
+            PlannerDecision(kind="tool_call", text="write summary", tool_call=ToolCall(name="write_file", argument="summary.txt ::: done")),
+            PlannerDecision(kind="text", text="Wrote summary.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_inspection_budget",
+            backend=backend,
+        )
+
+        result = agent.run("complete a repository workflow and write summary")
+
+        self.assertIn("Wrote summary", result.final_response)
+        self.assertTrue((self.project_root / "summary.txt").exists())
+        self.assertTrue(any(step.kind == "inspection_budget_blocked" for step in result.trace))
+        self.assertTrue(any("next step must be productive" in call["message"] for call in backend.calls))
+
+    def test_backend_loop_counts_skills_and_read_only_terminal_as_inspection(self) -> None:
+        skill_dir = self.project_root / "skills" / "daily-source"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: daily-source\n---\n# Daily Source\n", encoding="utf-8")
+        for index in range(11):
+            (self.project_root / f"context{index}.txt").write_text(f"value {index}", encoding="utf-8")
+        decisions = [
+            PlannerDecision(kind="tool_call", text="list skills", tool_call=ToolCall(name="skills", argument="list"), requires_edit=True),
+            PlannerDecision(kind="tool_call", text="view skill", tool_call=ToolCall(name="skills", argument="view daily-source")),
+            PlannerDecision(kind="tool_call", text="cat context", tool_call=ToolCall(name="terminal", argument="cat context0.txt")),
+        ]
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text=f"read {index}", tool_call=ToolCall(name="read", argument=f"context{index}.txt"))
+            for index in range(1, 11)
+        )
+        decisions.extend([
+            PlannerDecision(kind="tool_call", text="write summary", tool_call=ToolCall(name="write_file", argument="summary.txt ::: done")),
+            PlannerDecision(kind="text", text="Wrote summary.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_inspection_budget_skills_terminal",
+            backend=backend,
+        )
+
+        result = agent.run("complete workflow and write summary")
+
+        self.assertIn("Wrote summary", result.final_response)
+        self.assertTrue((self.project_root / "summary.txt").exists())
+        self.assertTrue(any(step.kind == "inspection_budget_blocked" for step in result.trace))
+
+    def test_backend_loop_stops_after_repeated_inspection_budget_blocks(self) -> None:
+        for index in range(20):
+            (self.project_root / f"context{index}.txt").write_text(f"value {index}", encoding="utf-8")
+        decisions = [
+            PlannerDecision(kind="tool_call", text=f"read {index}", tool_call=ToolCall(name="read", argument=f"context{index}.txt"), requires_edit=True)
+            for index in range(13)
+        ]
+        read_only_python = "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('context0.txt').read_text())\nPY"
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text="inspect again", tool_call=ToolCall(name="terminal", argument=read_only_python))
+            for _ in range(6)
+        )
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_inspection_budget_stop",
+            backend=backend,
+        )
+
+        result = agent.run("complete workflow and write summary")
+
+        self.assertIn("Stopped because the backend kept proposing inspection-only tool calls", result.final_response)
+        self.assertGreaterEqual(sum(1 for step in result.trace if step.kind == "inspection_budget_blocked"), 4)
+
+    def test_backend_loop_blocks_long_workflow_without_any_edit(self) -> None:
+        decisions = [
+            PlannerDecision(kind="tool_call", text="check background", tool_call=ToolCall(name="background", argument="list"), requires_edit=(index == 0))
+            for index in range(45)
+        ]
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_no_edit_budget",
+            backend=backend,
+        )
+
+        result = agent.run("complete workflow and write summary")
+
+        self.assertIn("Stopped because the backend kept proposing non-writing tool calls", result.final_response)
+        self.assertGreaterEqual(sum(1 for step in result.trace if step.kind == "no_edit_budget_blocked"), 4)
+
+    def test_terminal_python_read_text_counts_as_inspection_but_subprocess_does_not(self) -> None:
+        read_only = "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('README.md').read_text())\nPY"
+        productive = "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', 'script.py'])\nPY"
+
+        self.assertTrue(self.agent._terminal_is_read_only_inspection(read_only))
+        self.assertFalse(self.agent._terminal_is_read_only_inspection(productive))
+        self.assertTrue(self.agent._terminal_command_has_write_hint("python3 script.py --output result.json"))
+
+    def test_normalizes_compound_tool_names_from_backend(self) -> None:
+        call = self.agent._normalize_tool_call(ToolCall(name="background wait", argument="bg1 20"))
+        self.assertEqual(call.name, "background")
+        self.assertEqual(call.argument, "wait bg1 20")
+
+    def test_background_wait_loop_helpers_detect_running_tasks(self) -> None:
+        self.assertEqual(self.agent._background_task_id_from_argument("wait bg3 120"), "bg3")
+        self.assertEqual(self.agent._background_task_id_from_argument("status bg7"), "bg7")
+        self.assertIsNone(self.agent._background_task_id_from_argument("tail bg3"))
+        self.assertEqual(
+            self.agent._background_running_task_id_from_result("Background task bg3 is still running after 120.0s."),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_running_task_id_from_result("bg3: running, 252.3s\n$ command"),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_running_task_id_from_result("bg3 tail (running):\npartial output"),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_finished_task_id_from_result("Background task bg3 completed with exit code 0.\n$ command"),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_finished_task_id_from_result("Stopped background task bg3 with exit code -15."),
+            "bg3",
+        )
+
+    def test_backend_loop_blocks_wait_after_tail_status_cycle(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'import time; print(\"partial\", flush=True); time.sleep(5)'"
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="start slow job", tool_call=ToolCall(name="background", argument=f"start {command}")),
+            PlannerDecision(kind="tool_call", text="wait slow job", tool_call=ToolCall(name="background", argument="wait bg1 0.1")),
+            PlannerDecision(kind="tool_call", text="tail slow job", tool_call=ToolCall(name="background", argument="tail bg1")),
+            PlannerDecision(kind="tool_call", text="status slow job", tool_call=ToolCall(name="background", argument="status bg1")),
+            PlannerDecision(kind="tool_call", text="wait again", tool_call=ToolCall(name="background", argument="wait bg1 0.1")),
+            PlannerDecision(kind="tool_call", text="stop slow job", tool_call=ToolCall(name="background", argument="stop bg1")),
+            PlannerDecision(kind="text", text="Stopped the stuck background task and continued.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_background_wait_loop",
+            backend=backend,
+        )
+
+        result = agent.run("run a workflow with a slow background source")
+
+        self.assertIn("Stopped the stuck", result.final_response)
+        self.assertTrue(any(step.kind == "background_wait_loop_blocked" for step in result.trace))
+        self.assertTrue(any("Do not wait again" in call["message"] for call in backend.calls))
 
     def test_backend_followup_carries_run_state_across_tool_calls(self) -> None:
         target = self.project_root / "notes.txt"

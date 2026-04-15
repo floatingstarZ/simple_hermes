@@ -35,6 +35,8 @@ SECRET_REDACTION_PATTERNS = (
     r"sk-[A-Za-z0-9_-]{8,}",
     r"gh[pousr]_[A-Za-z0-9_]{8,}",
 )
+WORKFLOW_INSPECTION_BUDGET = 12
+WORKFLOW_NO_EDIT_STEP_BUDGET = 40
 
 
 @dataclass
@@ -243,6 +245,11 @@ class SimpleAgent:
             failure_hint += (
                 "\nThe terminal tool does not allow shell redirection. Run the command again without >, >>, or 2>; "
                 "use the captured stdout/stderr from the tool result as your observation, then persist derived content with write_file or patch_file."
+            )
+        if tool_name == "background" and " is still running after " in result:
+            failure_hint += (
+                "\nThe background task is still running. Do not wait for it indefinitely; inspect tail output, stop it if enough partial output exists, "
+                "or continue with another source/write step."
             )
         return (
             f"Original user request:\n{original_message}\n\n"
@@ -833,6 +840,18 @@ class SimpleAgent:
             return decision.text
         return f"{decision.text} | argument={decision.tool_call.argument}"
 
+    def _normalize_tool_call(self, call: ToolCall) -> ToolCall:
+        """把 `background wait` 这类模型生成的复合工具名归一成真实工具调用。"""
+        name = call.name.strip()
+        argument = call.argument.strip()
+        lowered = name.lower()
+        compound_tools = {"background", "skills", "cron", "mcp"}
+        parts = lowered.split(maxsplit=1)
+        if len(parts) == 2 and parts[0] in compound_tools:
+            merged_argument = f"{parts[1]} {argument}".strip()
+            return ToolCall(name=parts[0], argument=merged_argument)
+        return ToolCall(name=lowered, argument=argument)
+
     def _inspection_call_key(self, tool_name: str, argument: str) -> tuple[str, str]:
         """规范化检查类工具调用，便于阻断重复的大范围读取。"""
         normalized = argument.strip()
@@ -841,6 +860,64 @@ class SimpleAgent:
         elif tool_name == "tree" and not normalized:
             normalized = "."
         return tool_name, normalized
+
+    def _terminal_is_read_only_inspection(self, argument: str) -> bool:
+        """识别 terminal 中明显只是在读取上下文的命令。"""
+        stripped = argument.strip().lower()
+        read_only_prefixes = (
+            "cat ",
+            "ls",
+            "find ",
+            "rg ",
+            "grep ",
+            "sed -n ",
+            "head ",
+            "tail ",
+            "pwd",
+            "wc ",
+        )
+        if any(stripped == prefix.strip() or stripped.startswith(prefix) for prefix in read_only_prefixes):
+            return True
+        python_read_markers = ("read_text", "json.loads", "json.load")
+        python_write_or_exec_markers = ("write_text", "subprocess", " os.system", "check_call", "check_output", "run(")
+        if stripped.startswith(("python ", "python3 ", "python -", "python3 -")):
+            if any(marker in stripped for marker in python_read_markers):
+                return not any(marker in stripped for marker in python_write_or_exec_markers)
+        return False
+
+    def _tool_call_is_inspection(self, tool_name: str, argument: str) -> bool:
+        """判断工具调用是否只是检查上下文，而不是执行/写入/验证。"""
+        if tool_name in INSPECTION_TOOLS:
+            return True
+        if tool_name == "skills":
+            action = argument.strip().split(maxsplit=1)[0].lower() if argument.strip() else "list"
+            return action in {"list", "view"}
+        if tool_name == "terminal":
+            return self._terminal_is_read_only_inspection(argument)
+        return False
+
+    def _terminal_command_has_write_hint(self, argument: str) -> bool:
+        """在执行前识别明显会写文件的 terminal 命令。"""
+        lower_arg = argument.lower()
+        write_hints = (
+            "write_text",
+            ".write(",
+            "sed -i",
+            "perl -pi",
+            "tee ",
+            " > ",
+            ">>",
+            "--output",
+        )
+        return any(hint in lower_arg for hint in write_hints)
+
+    def _tool_call_may_write_deliverable(self, tool_name: str, argument: str) -> bool:
+        """判断下一步是否可能直接落盘交付物。"""
+        if tool_name in {"write_file", "patch_file"}:
+            return True
+        if tool_name == "terminal":
+            return self._terminal_command_has_write_hint(argument)
+        return False
 
     def _looks_like_failed_tool_result(self, result: str) -> bool:
         """识别已知工具失败文本，用于重复调用恢复逻辑。"""
@@ -901,6 +978,74 @@ class SimpleAgent:
             "If the change is genuinely impossible, explain the concrete blocker."
         )
 
+    def _inspection_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """长工作流中检查过多但没有写入时，要求 planner 执行或落盘。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed tool call {tool_name}({argument!r}) is another inspection step, but this run has already spent many steps inspecting files and skills without any successful write.\n"
+            f"Inspection budget block count in this run: {block_count}.\n"
+            "Do not keep reading workflow files, raw JSON, or source outputs with read/tree/skills or read-only terminal commands such as Python read_text/json.loads snippets. "
+            "The next step must be productive: write the deliverable with write_file/patch_file, or run a terminal/background command that directly creates or updates the requested output files. "
+            "If the collected evidence is incomplete, write a clearly marked draft from the observations already in run state instead of inspecting again. "
+            "Use terminal stdout/stderr already shown in the run state as observations."
+        )
+
+    def _background_wait_loop_message(self, original_message: str, argument: str, observations: List[str]) -> str:
+        """后台任务多次未结束时，阻止继续等待同一个任务。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed background command ({argument!r}) continues waiting on a long-running task. Do not wait again for the same background task now.\n"
+            "Use background tail to extract partial output if needed, background stop if the task has produced enough output or appears stuck, "
+            "or proceed to another independent source/write_file/patch_file step. For multi-repository workflows, prefer smaller independent background commands instead of one long chained command."
+        )
+
+    def _no_edit_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """长工作流迟迟没有落盘时，要求进入写入阶段。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed tool call {tool_name}({argument!r}) does not directly write the requested deliverable, "
+            f"but this run has already used many steps without a successful file edit. No-edit block count: {block_count}.\n"
+            "The next step must create or update the deliverable with write_file/patch_file, or a terminal command that clearly writes output files. "
+            "Do not inspect more context, do not launch more collection jobs, and do not wait for background tasks unless a requested output file has already been written. "
+            "If the evidence is incomplete, write a clearly marked draft from the current run observations."
+        )
+
+    def _background_task_id_from_argument(self, argument: str) -> str | None:
+        parts = argument.strip().split()
+        if len(parts) >= 2 and parts[0].lower() in {"wait", "status"}:
+            return parts[1]
+        return None
+
+    def _background_running_task_id_from_result(self, result: str) -> str | None:
+        match = re.search(r"Background task (\S+) is still running after", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+): running,", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+) tail \(running\):", result)
+        if match:
+            return match.group(1)
+        return None
+
+    def _background_finished_task_id_from_result(self, result: str) -> str | None:
+        match = re.search(r"Background task (\S+) completed with exit code", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"Stopped background task (\S+) with exit code", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+): done exit=", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+) tail \(done exit=", result)
+        if match:
+            return match.group(1)
+        return None
+
     def _premature_test_message(self, original_message: str, text: str, observations: List[str]) -> str:
         """planner 在必需验证完成前试图结束时，构造恢复提示。"""
         return (
@@ -926,16 +1071,7 @@ class SimpleAgent:
         if "exit code: 0" not in result:
             return False
         lower_arg = argument.lower()
-        edit_hints = (
-            "write_text",
-            ".write(",
-            "sed -i",
-            "perl -pi",
-            "tee ",
-            "patched",
-            "overwrite",
-        )
-        return any(hint in lower_arg for hint in edit_hints)
+        return self._terminal_command_has_write_hint(argument) or "patched" in lower_arg or "overwrite" in lower_arg
 
     def _tool_result_is_successful_test(self, tool_name: str, argument: str, result: str) -> bool:
         """识别成功验证，并排除 “Ran 0 tests” 这类空跑。"""
@@ -1008,6 +1144,10 @@ class SimpleAgent:
         run_observations: List[str] = []
         blocked_repeats = 0
         blocked_successful_inspections = 0
+        inspection_steps_without_progress = 0
+        inspection_budget_blocks = 0
+        no_edit_budget_blocks = 0
+        background_still_running_counts: dict[str, int] = {}
         requires_edit = bool(
             active_task is not None
             and active_task.get("category") == "coding"
@@ -1033,6 +1173,8 @@ class SimpleAgent:
                 emit(AgentTraceStep(step=step, kind="backend_error_fallback", content=error_text))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=fallback_text, tool_used=last_tool_used, steps=step, trace=trace)
+            if decision.tool_call is not None:
+                decision.tool_call = self._normalize_tool_call(decision.tool_call)
             requires_edit = requires_edit or decision.requires_edit
             requires_test = requires_test or decision.requires_test
             if requires_edit and active_task is None:
@@ -1067,6 +1209,13 @@ class SimpleAgent:
                 return AgentResponse(final_response=decision.text, tool_used=last_tool_used, steps=step, trace=trace)
 
             call_key = (decision.tool_call.name, decision.tool_call.argument)
+            if decision.tool_call.name == "background":
+                task_id = self._background_task_id_from_argument(decision.tool_call.argument)
+                if task_id and background_still_running_counts.get(task_id, 0) >= 3:
+                    recovery_message = self._background_wait_loop_message(original_message, decision.tool_call.argument, run_observations)
+                    emit(AgentTraceStep(step=step, kind="background_wait_loop_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                    current_message = recovery_message
+                    continue
             if call_key in failed_calls:
                 blocked_repeats += 1
                 recovery_message = self._repeated_failure_message(
@@ -1088,8 +1237,62 @@ class SimpleAgent:
                 current_message = recovery_message
                 continue
             inspection_key = self._inspection_call_key(decision.tool_call.name, decision.tool_call.argument)
-            if decision.tool_call.name in INSPECTION_TOOLS and inspection_key in completed_inspections:
+            is_inspection_call = self._tool_call_is_inspection(decision.tool_call.name, decision.tool_call.argument)
+            if (
+                requires_edit
+                and not successful_edit
+                and step >= WORKFLOW_NO_EDIT_STEP_BUDGET
+                and not self._tool_call_may_write_deliverable(decision.tool_call.name, decision.tool_call.argument)
+            ):
+                no_edit_budget_blocks += 1
+                recovery_message = self._no_edit_budget_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    no_edit_budget_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="no_edit_budget_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if no_edit_budget_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept proposing non-writing tool calls after the no-edit workflow budget was exhausted. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "A follow-up run should write or patch the requested deliverable from the collected observations."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
+            if (
+                requires_edit
+                and not successful_edit
+                and is_inspection_call
+                and inspection_steps_without_progress >= WORKFLOW_INSPECTION_BUDGET
+            ):
+                inspection_budget_blocks += 1
+                recovery_message = self._inspection_budget_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    inspection_budget_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="inspection_budget_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if inspection_budget_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept proposing inspection-only tool calls after the workflow inspection budget was exhausted. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "The next successful run should write or patch the requested deliverable instead of reading more context."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
+            if is_inspection_call and inspection_key in completed_inspections:
                 blocked_successful_inspections += 1
+                inspection_steps_without_progress += 1
                 if decision.tool_call.name == "read":
                     recovery_message = self._repeated_read_message(
                         original_message,
@@ -1130,13 +1333,32 @@ class SimpleAgent:
             run_observations.append(self._compact_observation(decision.tool_call.name, decision.tool_call.argument, result))
             if self._looks_like_failed_tool_result(result):
                 failed_calls[call_key] = result
+            elif decision.tool_call.name == "background":
+                inspection_steps_without_progress = 0
+                running_task_id = self._background_running_task_id_from_result(result)
+                if running_task_id:
+                    background_still_running_counts[running_task_id] = background_still_running_counts.get(running_task_id, 0) + 1
+                else:
+                    finished_task_id = self._background_finished_task_id_from_result(result)
+                    if finished_task_id:
+                        background_still_running_counts.pop(finished_task_id, None)
             elif decision.tool_call.name in {"write_file", "patch_file"}:
                 successful_edit = True
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
+                no_edit_budget_blocks = 0
             elif decision.tool_call.name == "terminal" and self._terminal_may_have_edited(decision.tool_call.argument, result):
                 successful_edit = True
-            elif decision.tool_call.name in INSPECTION_TOOLS:
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
+                no_edit_budget_blocks = 0
+            elif self._tool_call_is_inspection(decision.tool_call.name, decision.tool_call.argument):
                 completed_inspections[inspection_key] = result
                 blocked_successful_inspections = 0
+                inspection_steps_without_progress += 1
+            else:
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
             if self._tool_result_is_successful_test(decision.tool_call.name, decision.tool_call.argument, result):
                 successful_test = True
             if self._tool_result_is_diff(decision.tool_call.name, result):

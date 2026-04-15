@@ -330,6 +330,22 @@ class ToolTests(unittest.TestCase):
         self.assertIn("...[truncated]...", text)
         self.assertLess(len(text), 3200)
 
+    def test_terminal_allows_shell_redirection_by_default(self) -> None:
+        text = self.tools.terminal("printf redirected > redirected.txt")
+
+        self.assertIn("exit code: 0", text)
+        self.assertEqual((self.project_root / "redirected.txt").read_text(encoding="utf-8"), "redirected")
+
+    def test_terminal_refuses_shell_redirection_when_dangerous_terminal_disabled(self) -> None:
+        os.environ["SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL"] = "0"
+        try:
+            guarded = BuiltInTools(self.memory, self.sessions, self.project_root)
+            text = guarded.terminal("printf redirected > redirected.txt")
+            self.assertIn("Refusing terminal command with shell redirection", text)
+            self.assertFalse((self.project_root / "redirected.txt").exists())
+        finally:
+            os.environ.pop("SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL", None)
+
     def test_background_task_can_start_wait_and_record_completion(self) -> None:
         command = f"{shlex.quote(sys.executable)} -c 'print(\"background done\")'"
         start = self.tools.background(f"start {command}")
@@ -343,6 +359,22 @@ class ToolTests(unittest.TestCase):
         self.assertIn("bg1: done exit=0", listed)
         history = self.sessions.history(limit=10)
         self.assertTrue(any(row.get("kind") == "background_result" for row in history))
+
+    def test_background_wait_running_task_suggests_tail_stop_or_proceed(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'import time; print(\"partial\", flush=True); time.sleep(2)'"
+        start = self.tools.background(f"start {command}")
+        self.assertIn("Started background task bg1", start)
+
+        waited = self.tools.background("wait bg1 0.1")
+        tailed = self.tools.background("tail bg1")
+
+        self.assertIn("still running", waited)
+        self.assertIn("background tail", waited)
+        self.assertIn("background stop", waited)
+        self.assertIn("partial", waited)
+        self.assertIn("bg1 tail (running):", tailed)
+        self.assertIn("partial", tailed)
+        self.tools.background("stop bg1")
 
     def test_background_task_refuses_dangerous_terminal_commands(self) -> None:
         os.environ["SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL"] = "0"
@@ -534,6 +566,30 @@ class ToolTests(unittest.TestCase):
         self.assertIn("Loaded skill into session context", used)
         history = self.sessions.history(session_id="default", limit=10)
         self.assertTrue(any(row.get("kind") == "skill_context" for row in history))
+
+    def test_skills_list_view_and_use_project_local_skill(self) -> None:
+        skill_dir = self.project_root / "skills" / "huggingface-papers"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: huggingface-papers\n"
+            "description: Fetch HuggingFace Daily Papers.\n"
+            "---\n"
+            "# HuggingFace Papers\n",
+            encoding="utf-8",
+        )
+
+        listed = self.tools.skills("list")
+        viewed = self.tools.skills("view huggingface-papers")
+        used = self.tools.skills("use huggingface-papers")
+
+        self.assertIn("Project-local skills", listed)
+        self.assertIn("- huggingface-papers", listed)
+        self.assertIn("skill:huggingface-papers (project)", viewed)
+        self.assertIn("Fetch HuggingFace Daily Papers", viewed)
+        self.assertIn("Loaded skill into session context (project)", used)
+        history = self.sessions.history(session_id="default", limit=10)
+        self.assertTrue(any("source=project" in row.get("content", "") for row in history))
 
     def test_cron_add_run_due_and_delete(self) -> None:
         self.tools.cron_path = Path(self.temp_dir.name) / "cron.json"
