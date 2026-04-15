@@ -29,6 +29,7 @@ PROJECT_CONTEXT_FILE_CHAR_LIMIT = 7000
 PROJECT_CONTEXT_TOTAL_CHAR_LIMIT = 28000
 PROJECT_SKILL_SUMMARY_LIMIT = 40
 PROJECT_SKILL_READ_CHAR_LIMIT = 2500
+BACKEND_COMPACT_MEMORY_LIMIT = 12000
 SECRET_REDACTION_PATTERNS = (
     r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
     r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+",
@@ -531,6 +532,36 @@ class SimpleAgent:
             blocks.append(workflow_state)
         return "\n\n".join(block for block in blocks if block)
 
+    def _compact_backend_memory_block(self) -> str:
+        """后端连接/上下文异常后使用的紧凑记忆块，保留开头规则和末尾 workflow state。"""
+        text = self._backend_memory_block()
+        if len(text) <= BACKEND_COMPACT_MEMORY_LIMIT:
+            return text
+        head_limit = int(BACKEND_COMPACT_MEMORY_LIMIT * 0.7)
+        tail_limit = BACKEND_COMPACT_MEMORY_LIMIT - head_limit
+        return (
+            text[:head_limit]
+            + "\n...[compact retry omitted middle project context]...\n"
+            + text[-tail_limit:]
+        )
+
+    def _backend_error_is_retryable(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = (
+            "connection",
+            "closed connection",
+            "incomplete chunked read",
+            "timed out",
+            "timeout",
+            "reset by peer",
+            "temporarily",
+            "429",
+            "502",
+            "503",
+            "504",
+        )
+        return any(marker in text for marker in markers)
+
     def plan(self, message: str, allow_explicit_tools: bool = True) -> PlannerDecision:
         """从显式命令或后端 planner 获得一个规划决策。"""
         if allow_explicit_tools:
@@ -542,12 +573,28 @@ class SimpleAgent:
                     tool_call=ToolCall(name=tool_name, argument=arg),
                 )
         if self.backend is not None:
-            return self.backend.plan(
-                message=message,
-                memory_block=self._backend_memory_block(),
-                history_text=self._backend_history_text(limit=12),
-                tools_text=self.tools.help_text(),
-            )
+            try:
+                return self.backend.plan(
+                    message=message,
+                    memory_block=self._backend_memory_block(),
+                    history_text=self._backend_history_text(limit=12),
+                    tools_text=self.tools.help_text(),
+                )
+            except Exception as exc:
+                if not self._backend_error_is_retryable(exc):
+                    raise
+                compact_message = (
+                    f"{message}\n\n"
+                    "The previous full-context planner call failed with a transient backend/connection error. "
+                    "Use this compact retry context to choose the next concrete tool call. "
+                    "Prefer continuing from workflow todo state and recent history instead of restarting broad inspection."
+                )
+                return self.backend.plan(
+                    message=compact_message,
+                    memory_block=self._compact_backend_memory_block(),
+                    history_text=self._backend_history_text(limit=4),
+                    tools_text=self.tools.help_text(),
+                )
 
         return PlannerDecision(kind="text", text=self._fallback_text(), tool_call=None)
 
@@ -1130,6 +1177,23 @@ class SimpleAgent:
             return parts[1]
         return None
 
+    def _background_wait_task_id_from_argument(self, argument: str) -> str | None:
+        parts = argument.strip().split()
+        if len(parts) >= 2 and parts[0].lower() == "wait":
+            return parts[1]
+        return None
+
+    def _background_task_known_finished(self, task_id: str, observations: List[str]) -> bool:
+        patterns = (
+            rf"Background task {re.escape(task_id)} completed with exit code",
+            rf"Background task {re.escape(task_id)} is already complete",
+            rf"Stopped background task {re.escape(task_id)} with exit code",
+            rf"{re.escape(task_id)}: done exit=",
+            rf"{re.escape(task_id)} tail \(done exit=",
+        )
+        recent = "\n".join(observations[-8:])
+        return any(re.search(pattern, recent) for pattern in patterns)
+
     def _background_running_task_id_from_result(self, result: str) -> str | None:
         match = re.search(r"Background task (\S+) is still running after", result)
         if match:
@@ -1330,8 +1394,12 @@ class SimpleAgent:
 
             call_key = (decision.tool_call.name, decision.tool_call.argument)
             if decision.tool_call.name == "background":
-                task_id = self._background_task_id_from_argument(decision.tool_call.argument)
-                if task_id and background_still_running_counts.get(task_id, 0) >= 3:
+                task_id = self._background_wait_task_id_from_argument(decision.tool_call.argument)
+                if (
+                    task_id
+                    and background_still_running_counts.get(task_id, 0) >= 3
+                    and not self._background_task_known_finished(task_id, run_observations)
+                ):
                     recovery_message = self._background_wait_loop_message(original_message, decision.tool_call.argument, run_observations)
                     emit(AgentTraceStep(step=step, kind="background_wait_loop_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                     current_message = recovery_message

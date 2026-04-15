@@ -4,12 +4,15 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 from urllib import request
 
 from simple_hermes.agent.prompting import PLANNER_SYSTEM_MESSAGE, PromptContext, build_planner_prompt
+
+T = TypeVar("T")
 
 
 @dataclass
@@ -47,6 +50,52 @@ class OpenAICompatibleBackend(LLMBackend):
         self.api_key = api_key
         self.model = model
         self.api_mode = api_mode
+
+    @staticmethod
+    def _retry_count() -> int:
+        raw = os.getenv("SIMPLE_HERMES_BACKEND_RETRIES", "").strip()
+        if not raw:
+            return 2
+        try:
+            return max(0, min(int(raw), 5))
+        except ValueError:
+            return 2
+
+    @staticmethod
+    def _is_retryable_error(exc: Exception) -> bool:
+        if isinstance(exc, (json.JSONDecodeError, ValueError, KeyError)):
+            return False
+        text = str(exc).lower()
+        retry_markers = (
+            "connection",
+            "closed connection",
+            "incomplete chunked read",
+            "timed out",
+            "timeout",
+            "temporarily",
+            "reset by peer",
+            "rate limit",
+            "429",
+            "502",
+            "503",
+            "504",
+        )
+        return any(marker in text for marker in retry_markers)
+
+    @classmethod
+    def _with_retries(cls, operation: Callable[[], T]) -> T:
+        attempts = cls._retry_count() + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return operation()
+            except Exception as exc:
+                last_error = exc
+                if attempt >= attempts - 1 or not cls._is_retryable_error(exc):
+                    raise
+                time.sleep(min(0.5 * (2 ** attempt), 4.0))
+        assert last_error is not None
+        raise last_error
 
     @staticmethod
     def _load_planner_json(content: str) -> dict:
@@ -162,8 +211,8 @@ class OpenAICompatibleBackend(LLMBackend):
             )
         )
         if self.api_mode == "codex_responses":
-            return self._responses_plan(prompt)
-        return self._chat_completions_plan(prompt)
+            return self._with_retries(lambda: self._responses_plan(prompt))
+        return self._with_retries(lambda: self._chat_completions_plan(prompt))
 
 
 class HermesRuntimeBackend(LLMBackend):
@@ -181,16 +230,19 @@ class HermesRuntimeBackend(LLMBackend):
                 tools_text=tools_text,
             )
         )
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": PLANNER_SYSTEM_MESSAGE},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0,
-        )
-        content = self._extract_content(response)
-        return OpenAICompatibleBackend._parse_response_text(content)
+        def request_once() -> PlannerDecision:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": PLANNER_SYSTEM_MESSAGE},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0,
+            )
+            content = self._extract_content(response)
+            return OpenAICompatibleBackend._parse_response_text(content)
+
+        return OpenAICompatibleBackend._with_retries(request_once)
 
 
 def _detect_hermes_repo_root() -> Optional[str]:

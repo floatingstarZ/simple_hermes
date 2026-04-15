@@ -61,6 +61,24 @@ class ErrorAfterFirstToolBackend:
         raise RuntimeError("backend exploded")
 
 
+class CompactRetryBackend:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def plan(self, *, message: str, memory_block: str, history_text: str, tools_text: str) -> PlannerDecision:
+        self.calls.append(
+            {
+                "message": message,
+                "memory_block": memory_block,
+                "history_text": history_text,
+                "tools_text": tools_text,
+            }
+        )
+        if len(self.calls) == 1:
+            raise RuntimeError("peer closed connection without sending complete message body")
+        return PlannerDecision(kind="text", text="compact retry succeeded", tool_call=None)
+
+
 class BackendResponseParsingTests(unittest.TestCase):
     def test_parse_response_text_accepts_brief_explanation_around_json(self) -> None:
         decision = OpenAICompatibleBackend._parse_response_text(
@@ -87,6 +105,37 @@ class BackendResponseParsingTests(unittest.TestCase):
         )
         self.assertEqual(decision.kind, "text")
         self.assertEqual(decision.text, "Done.")
+
+    def test_backend_retry_helper_retries_transient_connection_errors(self) -> None:
+        calls = {"count": 0}
+
+        def flaky_operation():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("peer closed connection without sending complete message body")
+            return "ok"
+
+        os.environ["SIMPLE_HERMES_BACKEND_RETRIES"] = "1"
+        try:
+            self.assertEqual(OpenAICompatibleBackend._with_retries(flaky_operation), "ok")
+        finally:
+            os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
+        self.assertEqual(calls["count"], 2)
+
+    def test_backend_retry_helper_does_not_retry_parse_errors(self) -> None:
+        calls = {"count": 0}
+
+        def bad_operation():
+            calls["count"] += 1
+            raise ValueError("Planner response did not contain JSON")
+
+        os.environ["SIMPLE_HERMES_BACKEND_RETRIES"] = "3"
+        try:
+            with self.assertRaises(ValueError):
+                OpenAICompatibleBackend._with_retries(bad_operation)
+        finally:
+            os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
+        self.assertEqual(calls["count"], 1)
 
     def test_planner_prompt_prefers_single_line_patch_file_format(self) -> None:
         prompt = build_planner_prompt(
@@ -323,6 +372,25 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("[in_progress] synth: Synthesize final deliverable", memory_block)
         self.assertIn("[pending] verify: Run verification", memory_block)
         self.assertIn("Use the todo tool to mark completed phases", memory_block)
+
+    def test_backend_plan_retries_with_compact_context_after_transient_error(self) -> None:
+        (self.project_root / "AGENTS.md").write_text("Project instruction.\n" + ("long context\n" * 2000), encoding="utf-8")
+        (self.project_root / "CLAUDE.md").write_text("Claude instruction.\n" + ("long claude context\n" * 2000), encoding="utf-8")
+        (self.project_root / "MEMORY.md").write_text("Memory instruction.\n" + ("long memory context\n" * 2000), encoding="utf-8")
+        backend = CompactRetryBackend()
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_compact_retry",
+            backend=backend,
+        )
+
+        result = agent.run("continue a workflow")
+
+        self.assertIn("compact retry succeeded", result.final_response)
+        self.assertEqual(len(backend.calls), 2)
+        self.assertIn("compact retry context", backend.calls[1]["message"])
+        self.assertLess(len(backend.calls[1]["memory_block"]), len(backend.calls[0]["memory_block"]))
+        self.assertLessEqual(len(backend.calls[1]["history_text"]), len(backend.calls[0]["history_text"]))
 
     def test_detect_hermes_repo_root_from_env(self) -> None:
         os.environ["SIMPLE_HERMES_HERMES_ROOT"] = "/tmp/hermes-root"
@@ -832,6 +900,8 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertEqual(self.agent._background_task_id_from_argument("wait bg3 120"), "bg3")
         self.assertEqual(self.agent._background_task_id_from_argument("status bg7"), "bg7")
         self.assertIsNone(self.agent._background_task_id_from_argument("tail bg3"))
+        self.assertEqual(self.agent._background_wait_task_id_from_argument("wait bg3 120"), "bg3")
+        self.assertIsNone(self.agent._background_wait_task_id_from_argument("status bg7"))
         self.assertEqual(
             self.agent._background_running_task_id_from_result("Background task bg3 is still running after 120.0s."),
             "bg3",
@@ -851,6 +921,18 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertEqual(
             self.agent._background_finished_task_id_from_result("Stopped background task bg3 with exit code -15."),
             "bg3",
+        )
+        self.assertTrue(
+            self.agent._background_task_known_finished(
+                "bg3",
+                ["- background('stop bg3') -> Background task bg3 is already complete."],
+            )
+        )
+        self.assertFalse(
+            self.agent._background_task_known_finished(
+                "bg3",
+                ["- background('wait bg3 20') -> Background task bg3 is still running after 20.0s."],
+            )
         )
 
     def test_backend_loop_blocks_wait_after_tail_status_cycle(self) -> None:
