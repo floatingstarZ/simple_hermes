@@ -318,6 +318,38 @@ class SessionStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def search_all(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        query = query.strip()
+        if not query:
+            return []
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT m.session_id, m.role, m.content, m.kind, m.tool_name, m.created_at
+                FROM messages_fts f
+                JOIN messages m ON m.content = f.content AND m.session_id = f.session_id
+                WHERE messages_fts MATCH ?
+                ORDER BY m.id DESC
+                LIMIT ?
+                """,
+                (query, limit),
+            ).fetchall()
+            if rows:
+                return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            pass
+        rows = self.conn.execute(
+            """
+            SELECT session_id, role, content, kind, tool_name, created_at
+            FROM messages
+            WHERE content LIKE ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (f"%{query}%", limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def message_count(self, session_id: str = DEFAULT_SESSION_ID) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS c FROM messages WHERE session_id = ?",
@@ -368,6 +400,19 @@ class SessionStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def messages_for_session(self, session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT id, session_id, role, content, kind, tool_name, created_at
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
     def search_text(
         self,
         query: str,
@@ -392,6 +437,27 @@ class SessionStore:
             headline = "; ".join(row['content'][:80] for row in rows[:3])
         return "\n".join([
             f"Focused recall summary for '{query}':",
+            headline,
+            "",
+            "Supporting snippets:",
+            *snippets,
+        ])
+
+    def search_all_text(self, query: str, limit: int = 20) -> str:
+        rows = self.search_all(query=query, limit=limit)
+        if not rows:
+            return f"No cross-session history results for: {query}"
+        snippets = []
+        for row in reversed(rows):
+            prefix = f"[{row.get('session_id')}] [{row['role']}]"
+            if row.get("tool_name"):
+                prefix += f"<{row['tool_name']}>"
+            if row.get("kind"):
+                prefix += f"({row['kind']})"
+            snippets.append(f"{prefix} {row['content']}")
+        headline = "; ".join(row["content"][:80] for row in rows[:4])
+        return "\n".join([
+            f"Cross-session recall summary for '{query}':",
             headline,
             "",
             "Supporting snippets:",

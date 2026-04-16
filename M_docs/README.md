@@ -25,8 +25,9 @@
 ## 实现细节图
 
 - [IMPLEMENTATION_DETAILS.md](IMPLEMENTATION_DETAILS.md)
+- [IMPROVEMENT_HISTORY.md](IMPROVEMENT_HISTORY.md)
 
-该文件包含更细粒度的 Mermaid 图，覆盖：
+`IMPLEMENTATION_DETAILS.md` 包含更细粒度的 Mermaid 图，覆盖：
 
 - CLI 到 agent loop 的实时 step 输出链路
 - backend planner 和 tool registry 的决策路径
@@ -37,6 +38,8 @@
 - benchmark harness 的测试路径
 - checkpoint / rollback 的项目快照路径
 - unittest 与交互式 trace 的 HTML 测试报告生成路径
+
+`IMPROVEMENT_HISTORY.md` 记录从基础 agent loop、多轮任务、去启发式、长期会话、后台任务、DailyTrack 到后端可靠性修复的改进历史，并列出对应 commit、测试证据和剩余风险。
 
 ## 重新生成 SVG
 

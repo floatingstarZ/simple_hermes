@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import os
 import re
+import shlex
 import threading
 import time
 import uuid
@@ -20,10 +22,40 @@ from simple_hermes.config import (
 )
 from simple_hermes.state.memory import MemoryStore
 from simple_hermes.state.session import SessionStore
-from simple_hermes.tools.builtin import BuiltInTools
+from simple_hermes.tools.builtin import ARTIFACT_STATE_KEY, BuiltInTools, TODO_STATE_KEY
 
 INSPECTION_TOOLS = {"read", "read_lines", "tree", "glob", "project_overview", "search"}
 ACTIVE_TASK_STATE_KEY = "active_task"
+PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "MEMORY.md")
+PROJECT_CONTEXT_FILE_CHAR_LIMIT = 7000
+PROJECT_CONTEXT_TOTAL_CHAR_LIMIT = 28000
+PROJECT_SKILL_SUMMARY_LIMIT = 40
+PROJECT_SKILL_READ_CHAR_LIMIT = 2500
+BACKEND_COMPACT_MEMORY_LIMIT = 12000
+SECRET_REDACTION_PATTERNS = (
+    r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
+    r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+",
+    r"sk-[A-Za-z0-9_-]{8,}",
+    r"gh[pousr]_[A-Za-z0-9_]{8,}",
+)
+WORKFLOW_INSPECTION_BUDGET = 12
+WORKFLOW_NO_EDIT_STEP_BUDGET = 40
+WORKFLOW_POST_EDIT_INSPECTION_BUDGET = 8
+WORKFLOW_ARTIFACT_SYNTHESIS_BUDGET = 4
+INCOMPLETE_DELIVERABLE_MARKERS = (
+    "needs completion",
+    "needs to be completed",
+    "to be completed",
+    "not final",
+    "fill later",
+    "pending completion",
+    "待补",
+    "待整理",
+    "待完善",
+    "待完成",
+    "未完成",
+    "占位",
+)
 
 
 @dataclass
@@ -110,7 +142,7 @@ class SimpleAgent:
         self.backend = backend if backend is not None else backend_from_env()
         self._background_agent_counter = 0
         self._background_agent_tasks: dict[str, BackgroundAgentTask] = {}
-        self.tools = BuiltInTools(
+        self.tool_impl = BuiltInTools(
             self.memory,
             self.sessions,
             project_root,
@@ -120,7 +152,8 @@ class SimpleAgent:
             backend=self.backend,
             session_id=self.session_id,
             session_id_getter=lambda: self.session_id,
-        ).registry
+        )
+        self.tools = self.tool_impl.registry
 
     def _load_active_task(self) -> dict | None:
         """读取持久化的当前编码任务；遇到损坏状态时直接丢弃。"""
@@ -206,6 +239,22 @@ class SimpleAgent:
             return "Run state so far: no tool calls have completed in this run."
         return "Run state so far:\n" + "\n".join(observations[-8:])
 
+    def _background_event_message(self, original_message: str, events: str, observations: List[str]) -> str:
+        """把后台进程完成事件作为一等运行时事件交回 planner。
+
+        Hermes 的后台任务不是靠模型反复 `wait/poll` 推进，而是由 runtime
+        监控进程并在完成时通知 agent loop。这里把同样的机制压缩到
+        Simple Hermes：事件由工具层产生，主循环只负责注入上下文。
+        """
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            "Background process events were delivered by the runtime:\n"
+            f"{events}\n\n"
+            "Use these completion events as fresh evidence. Do not poll or wait for these finished background tasks again. "
+            "Proceed to the next concrete source, synthesis, write, verification, or final-answer step."
+        )
+
     def _compact_observation(self, tool_name: str, argument: str, result: str) -> str:
         """压缩单个工具结果，避免下一轮 planner prompt 过长。"""
         preview = result.replace("\n", "\\n")
@@ -215,6 +264,25 @@ class SimpleAgent:
         if len(rendered_arg) > 160:
             rendered_arg = rendered_arg[:160] + "...[truncated]"
         return f"- {tool_name}({rendered_arg!r}) -> {preview}"
+
+    def _planner_tool_result(self, tool_name: str, result: str, limit: int = 3500) -> str:
+        """给下一轮 planner 的工具结果预览。
+
+        Hermes 会把过大的工具输出落盘，并只把 preview + 引用放回上下文。
+        Simple Hermes 目前还没有完整 artifact store，但同样不能把长 stdout、
+        pip 错误、测试日志全文塞进每一轮 planner prompt。完整工具结果已经通过
+        `_record_tool_result()` 存入 session history；这里给 planner 的只是决策
+        所需的有界预览。
+        """
+        if len(result) <= limit:
+            return result
+        head_limit = int(limit * 0.7)
+        tail_limit = limit - head_limit
+        return (
+            result[:head_limit]
+            + f"\n...[tool result shortened for planner; full {tool_name} result is stored in session history]...\n"
+            + result[-tail_limit:]
+        )
 
     def _tool_followup_message(self, original_message: str, tool_name: str, result: str, observations: List[str]) -> str:
         """工具调用之后构造下一轮 planner 消息。
@@ -228,10 +296,32 @@ class SimpleAgent:
                 "\nThe last verification command failed. Use the failure output to identify the remaining implementation gap, "
                 "patch the relevant source file, and rerun tests before giving a final answer."
             )
+        if tool_name == "terminal" and result.startswith("Refusing terminal command with shell redirection"):
+            failure_hint += (
+                "\nThe terminal tool does not allow shell redirection. Run the command again without >, >>, or 2>; "
+                "use the captured stdout/stderr from the tool result as your observation, then persist derived content with write_file or patch_file."
+            )
+        if tool_name == "background" and " is still running after " in result:
+            failure_hint += (
+                "\nThe background task is still running. Do not wait for it indefinitely; inspect tail output, stop it if enough partial output exists, "
+                "or continue with another source/write step."
+            )
+        if tool_name == "background" and result.startswith("Refusing chained background command"):
+            failure_hint += (
+                "\nThe background tool rejected a chained shell command. Split independent source-collection commands into separate background start calls, "
+                "or write a project-local script and start that script as one background task if the chain is truly atomic."
+            )
+        if tool_name == "validate_deliverable" and result.startswith("DELIVERABLE_VALIDATION failed"):
+            failure_hint += (
+                "\nThe deliverable failed structured validation. Do not keep patching individual markdown rows unless the failure is truly local. "
+                "Prefer rebuilding the deliverable from the candidate raw/artifact files listed by the validator, then run validate_deliverable again. "
+                "For JSON list/object failures such as min_items or required_fields, rebuild the whole structured file from artifact manifest entries "
+                "or tool_outputs logs instead of rereading the invalid output repeatedly."
+            )
         return (
             f"Original user request:\n{original_message}\n\n"
             f"{self._format_run_state(observations)}\n\n"
-            f"Tool {tool_name} returned:\n{result}\n\n"
+            f"Tool {tool_name} returned:\n{self._planner_tool_result(tool_name, result)}\n\n"
             "Use the tool result to answer the user's actual request directly. "
             "Only ask for another tool if the request still cannot be answered."
             f"{failure_hint}"
@@ -254,7 +344,21 @@ class SimpleAgent:
             ("lineage", "lineage"),
             ("sessions", "sessions"),
             ("descendants", "descendants"),
+            ("recall_all ", "recall_all"),
             ("recall ", "recall"),
+            ("todo ", "todo"),
+            ("todo", "todo"),
+            ("skills ", "skills"),
+            ("skills", "skills"),
+            ("cron ", "cron"),
+            ("cron", "cron"),
+            ("mcp ", "mcp"),
+            ("mcp", "mcp"),
+            ("artifact ", "artifact"),
+            ("artifact", "artifact"),
+            ("experience ", "experience"),
+            ("experience", "experience"),
+            ("validate_deliverable ", "validate_deliverable"),
             ("background ", "background"),
             ("read_lines ", "read_lines"),
             ("read ", "read"),
@@ -269,6 +373,9 @@ class SimpleAgent:
             ("search ", "search"),
             ("parallel_delegate ", "parallel_delegate"),
             ("delegate ", "delegate"),
+            ("fetch_url ", "fetch_url"),
+            ("dependency_scan", "dependency_scan"),
+            ("credential_audit", "credential_audit"),
             ("summarize", "summarize"),
             ("help", "help"),
         ]
@@ -286,14 +393,27 @@ class SimpleAgent:
             "help, remember <text>, remember_user <text>, memories, user_memories, history, recall <query>, read <file>, tree [path] [depth], "
             "terminal <command>, run_tests [unittest args], write_file <path> <content>, "
             "patch_file <path> ::: <target> ::: <replacement>, read_lines <path> <start> <end>, "
-            "glob <pattern>, project_overview, diff [path], background <start|list|status|tail|wait|stop>, search <query>, summarize"
+            "glob <pattern>, project_overview, diff [path], background <start|list|status|tail|wait|stop>, "
+            "skills <list|view|use|create|propose|candidates|promote>, experience <record|list|view|summarize>, "
+            "cron <add|list|run-due|run|delete>, recall_all <query>, mcp <resources|sessions|session|search>, "
+            "fetch_url <url>, dependency_scan, credential_audit, search <query>, summarize"
         )
 
-    def _backend_history_text(self, limit: int = 12) -> str:
+    def _backend_history_text(self, limit: int = 12, *, exclude_latest_user_message: str | None = None) -> str:
         """为后端 planner 准备最近对话上下文。"""
         rows = self.sessions.history(session_id=self.session_id, limit=limit)
         if not rows:
             return ""
+        if exclude_latest_user_message is not None:
+            # 当前轮输入已经作为 planner 的 `message` 传入；如果它又出现在
+            # recent history 中，会造成首轮 prompt 重复。DailyTrack 这类带有
+            # 大型项目指令和记忆块的任务尤其容易因此触发后端连接脆弱点。
+            target = exclude_latest_user_message.strip()
+            for index in range(len(rows) - 1, -1, -1):
+                row = rows[index]
+                if row.get("role") == "user" and row.get("kind") == "user_message" and row.get("content", "").strip() == target:
+                    rows = rows[:index] + rows[index + 1:]
+                    break
         fallback = self._fallback_text()
         lines = []
         for row in rows:
@@ -310,7 +430,259 @@ class SimpleAgent:
             lines.append(f"{prefix} {content}")
         return "\n".join(lines)
 
-    def plan(self, message: str, allow_explicit_tools: bool = True) -> PlannerDecision:
+    def _redact_project_context(self, text: str) -> str:
+        """清理项目级上下文里的常见密钥形态，避免 planner prompt 泄露凭证。"""
+        redacted = text
+        for pattern in SECRET_REDACTION_PATTERNS:
+            redacted = re.sub(
+                pattern,
+                lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]" if len(m.groups()) >= 2 else "[REDACTED]",
+                redacted,
+            )
+        return redacted
+
+    def _bounded_project_file_excerpt(self, path: Path, limit: int = PROJECT_CONTEXT_FILE_CHAR_LIMIT) -> str | None:
+        """读取项目指令文件的有界片段；失败时跳过而不是阻断规划。"""
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        text = self._redact_project_context(text.strip())
+        if len(text) > limit:
+            text = text[:limit] + "\n...[truncated; inspect the full file with read when relevant]"
+        return text
+
+    def _project_instruction_excerpts(self) -> list[tuple[str, str]]:
+        """收集项目级 agent 指令文件，并展开一层 `@file` 引用。
+
+        Codex/Hermes 在 DailyTrack 中表现更稳，一个关键原因是能完整看到
+        AGENTS/CLAUDE/MEMORY 这类项目契约。这里仍保持通用：只按文件引用
+        和常见指令文件加载，不写入任何具体仓库偏好。
+        """
+        excerpts: list[tuple[str, str]] = []
+        queue = list(PROJECT_INSTRUCTION_FILES)
+        seen: set[str] = set()
+        while queue:
+            filename = queue.pop(0)
+            if filename in seen:
+                continue
+            seen.add(filename)
+            path = (self.project_root / filename).resolve()
+            if not path.is_file():
+                continue
+            excerpt = self._bounded_project_file_excerpt(path)
+            if excerpt:
+                try:
+                    rel = str(path.relative_to(self.project_root))
+                except ValueError:
+                    rel = filename
+                excerpts.append((rel, excerpt))
+                for ref in re.findall(r"(?m)^\s*@([A-Za-z0-9_./-]+\.md)\s*$", excerpt):
+                    ref_path = (path.parent / ref).resolve()
+                    try:
+                        ref_rel = str(ref_path.relative_to(self.project_root))
+                    except ValueError:
+                        continue
+                    if ref_rel not in seen:
+                        queue.append(ref_rel)
+        return excerpts
+
+    def _workflow_state_text(self) -> str:
+        """把显式 todo/progress ledger 注入 planner prompt。"""
+        raw = self.sessions.get_state(self.session_id, TODO_STATE_KEY)
+        if not raw:
+            return ""
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(items, list) or not items:
+            return ""
+        active = [
+            item for item in items
+            if isinstance(item, dict) and item.get("status") in {"pending", "in_progress"}
+        ]
+        if not active:
+            return ""
+        lines = ["Current workflow todo ledger:"]
+        for item in active[:20]:
+            item_id = str(item.get("id", "?"))
+            status = str(item.get("status", "pending"))
+            content = str(item.get("content", "(no description)"))
+            lines.append(f"- [{status}] {item_id}: {content}")
+        lines.append("Use the todo tool to mark completed phases and start the next phase instead of rereading broad context.")
+        return "\n".join(lines)
+
+    def _artifact_manifest_items(self) -> list[dict]:
+        """读取当前会话记录的 artifact manifest。
+
+        这里读取的是工具层已经保存的结构化运行状态。它不是对用户意图的猜测，
+        只是把“已经有哪些原始产物/中间产物”显式交回 planner，减少重复读文件。
+        """
+        raw = self.sessions.get_state(self.session_id, ARTIFACT_STATE_KEY)
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, dict):
+            return []
+        artifacts = data.get("artifacts")
+        if not isinstance(artifacts, list):
+            return []
+        return [item for item in artifacts if isinstance(item, dict) and item.get("path")]
+
+    def _artifact_state_text(self) -> str:
+        """把 artifact manifest 摘要注入 planner prompt。"""
+        artifacts = self._artifact_manifest_items()
+        if not artifacts:
+            return ""
+        lines = [
+            "Current artifact manifest:",
+            f"- recorded artifacts: {len(artifacts)}",
+        ]
+        for item in artifacts[:16]:
+            bits = [str(item.get("path", "?")), str(item.get("kind", "file"))]
+            if "items" in item:
+                bits.append(f"items={item['items']}")
+            bits.append(f"bytes={item.get('bytes', 0)}")
+            lines.append("- " + " | ".join(bits))
+        if len(artifacts) > 16:
+            lines.append(f"- ... {len(artifacts) - 16} more artifacts omitted")
+        lines.append(
+            "Use these artifact paths as durable evidence. For synthesis workflows, build or patch deliverables from recorded artifacts instead of rereading broad raw/log directories."
+        )
+        return "\n".join(lines)
+
+    def _parse_project_skill_summary(self, skill_path: Path) -> tuple[str, str]:
+        """从本地 skill 的 SKILL.md 抽取名称和描述。
+
+        这里只读元信息，不展开脚本内容；真正使用技能前仍应 read 对应 SKILL.md。
+        """
+        name = skill_path.parent.name
+        description = ""
+        try:
+            text = skill_path.read_text(encoding="utf-8", errors="replace")[:PROJECT_SKILL_READ_CHAR_LIMIT]
+        except OSError:
+            return name, description
+        text = self._redact_project_context(text)
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end != -1:
+                for line in text[3:end].splitlines():
+                    key, sep, value = line.partition(":")
+                    if not sep:
+                        continue
+                    cleaned_key = key.strip().lower()
+                    cleaned_value = value.strip().strip("\"'")
+                    if cleaned_key == "name" and cleaned_value:
+                        name = cleaned_value
+                    elif cleaned_key == "description" and cleaned_value:
+                        description = cleaned_value
+        if not description:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    description = stripped.lstrip("#").strip()
+                    break
+        return name, description
+
+    def _project_skill_summaries(self) -> list[str]:
+        """列出项目内 skills/*/SKILL.md，帮助 planner 知道应该先读哪个技能。"""
+        skills_root = self.project_root / "skills"
+        if not skills_root.is_dir():
+            return []
+        lines: list[str] = []
+        for skill_path in sorted(skills_root.glob("*/SKILL.md"))[:PROJECT_SKILL_SUMMARY_LIMIT]:
+            try:
+                rel = str(skill_path.relative_to(self.project_root))
+            except ValueError:
+                rel = str(skill_path)
+            name, description = self._parse_project_skill_summary(skill_path)
+            suffix = f": {description}" if description else ""
+            lines.append(f"- {name} ({rel}){suffix}")
+        return lines
+
+    def _project_context_text(self) -> str:
+        """为 planner 构造通用项目上下文，不把任何具体项目偏好写死到代码里。"""
+        instruction_excerpts = self._project_instruction_excerpts()
+        skill_summaries = self._project_skill_summaries()
+        if not instruction_excerpts and not skill_summaries:
+            return ""
+
+        lines = [
+            "Project-level context:",
+            "- Treat repository files as the source of truth; do not hardcode project-specific preferences in Simple Hermes.",
+            "- Follow instruction files such as AGENTS.md, CLAUDE.md, and MEMORY.md when they are present.",
+            "- When project-local skills are listed under skills/, read the relevant SKILL.md before running its scripts or terminal commands.",
+        ]
+        if instruction_excerpts:
+            lines.append("Instruction file excerpts:")
+            for rel, excerpt in instruction_excerpts:
+                lines.append(f"## {rel}")
+                lines.append(excerpt)
+        if skill_summaries:
+            lines.append("Project-local skills:")
+            lines.extend(skill_summaries)
+        text = "\n".join(lines)
+        if len(text) > PROJECT_CONTEXT_TOTAL_CHAR_LIMIT:
+            text = text[:PROJECT_CONTEXT_TOTAL_CHAR_LIMIT] + "\n...[project context truncated]"
+        return text
+
+    def _backend_memory_block(self) -> str:
+        """合并长期记忆和项目级指令摘要，供后端 planner 使用。"""
+        blocks = [self.memory.as_prompt_block().strip()]
+        project_context = self._project_context_text().strip()
+        if project_context:
+            blocks.append(project_context)
+        workflow_state = self._workflow_state_text().strip()
+        if workflow_state:
+            blocks.append(workflow_state)
+        artifact_state = self._artifact_state_text().strip()
+        if artifact_state:
+            blocks.append(artifact_state)
+        return "\n\n".join(block for block in blocks if block)
+
+    def _compact_backend_memory_block(self) -> str:
+        """后端连接/上下文异常后使用的紧凑记忆块，保留开头规则和末尾 workflow state。"""
+        text = self._backend_memory_block()
+        if len(text) <= BACKEND_COMPACT_MEMORY_LIMIT:
+            return text
+        head_limit = int(BACKEND_COMPACT_MEMORY_LIMIT * 0.7)
+        tail_limit = BACKEND_COMPACT_MEMORY_LIMIT - head_limit
+        return (
+            text[:head_limit]
+            + "\n...[compact retry omitted middle project context]...\n"
+            + text[-tail_limit:]
+        )
+
+    def _backend_error_is_retryable(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = (
+            "connection",
+            "closed connection",
+            "incomplete chunked read",
+            "timed out",
+            "timeout",
+            "reset by peer",
+            "temporarily",
+            "error occurred while processing your request",
+            "request id",
+            "429",
+            "502",
+            "503",
+            "504",
+        )
+        return any(marker in text for marker in markers)
+
+    def plan(
+        self,
+        message: str,
+        allow_explicit_tools: bool = True,
+        *,
+        exclude_latest_user_message: str | None = None,
+    ) -> PlannerDecision:
         """从显式命令或后端 planner 获得一个规划决策。"""
         if allow_explicit_tools:
             tool_name, arg = self._plan_tool(message)
@@ -321,12 +693,28 @@ class SimpleAgent:
                     tool_call=ToolCall(name=tool_name, argument=arg),
                 )
         if self.backend is not None:
-            return self.backend.plan(
-                message=message,
-                memory_block=self.memory.as_prompt_block(),
-                history_text=self._backend_history_text(limit=12),
-                tools_text=self.tools.help_text(),
-            )
+            try:
+                return self.backend.plan(
+                    message=message,
+                    memory_block=self._backend_memory_block(),
+                    history_text=self._backend_history_text(limit=12, exclude_latest_user_message=exclude_latest_user_message),
+                    tools_text=self.tools.help_text(),
+                )
+            except Exception as exc:
+                if not self._backend_error_is_retryable(exc):
+                    raise
+                compact_message = (
+                    f"{message}\n\n"
+                    "The previous full-context planner call failed with a transient backend/connection error. "
+                    "Use this compact retry context to choose the next concrete tool call. "
+                    "Prefer continuing from workflow todo state and recent history instead of restarting broad inspection."
+                )
+                return self.backend.plan(
+                    message=compact_message,
+                    memory_block=self._compact_backend_memory_block(),
+                    history_text=self._backend_history_text(limit=4, exclude_latest_user_message=exclude_latest_user_message),
+                    tools_text=self.tools.help_text(),
+                )
 
         return PlannerDecision(kind="text", text=self._fallback_text(), tool_call=None)
 
@@ -688,6 +1076,18 @@ class SimpleAgent:
             return decision.text
         return f"{decision.text} | argument={decision.tool_call.argument}"
 
+    def _normalize_tool_call(self, call: ToolCall) -> ToolCall:
+        """把 `background wait` 这类模型生成的复合工具名归一成真实工具调用。"""
+        name = call.name.strip()
+        argument = call.argument.strip()
+        lowered = name.lower()
+        compound_tools = {"background", "skills", "cron", "mcp", "todo", "experience"}
+        parts = lowered.split(maxsplit=1)
+        if len(parts) == 2 and parts[0] in compound_tools:
+            merged_argument = f"{parts[1]} {argument}".strip()
+            return ToolCall(name=parts[0], argument=merged_argument)
+        return ToolCall(name=lowered, argument=argument)
+
     def _inspection_call_key(self, tool_name: str, argument: str) -> tuple[str, str]:
         """规范化检查类工具调用，便于阻断重复的大范围读取。"""
         normalized = argument.strip()
@@ -696,6 +1096,129 @@ class SimpleAgent:
         elif tool_name == "tree" and not normalized:
             normalized = "."
         return tool_name, normalized
+
+    def _terminal_is_read_only_inspection(self, argument: str) -> bool:
+        """识别 terminal 中明显只是在读取上下文的命令。"""
+        stripped = argument.strip().lower()
+        read_only_prefixes = (
+            "cat ",
+            "ls",
+            "find ",
+            "rg ",
+            "grep ",
+            "sed -n ",
+            "head ",
+            "tail ",
+            "pwd",
+            "wc ",
+        )
+        if any(stripped == prefix.strip() or stripped.startswith(prefix) for prefix in read_only_prefixes):
+            return True
+        python_read_markers = ("read_text", "json.loads", "json.load")
+        python_write_or_exec_markers = ("write_text", "subprocess", " os.system", "check_call", "check_output", "run(")
+        if stripped.startswith(("python ", "python3 ", "python -", "python3 -")):
+            if any(marker in stripped for marker in python_read_markers):
+                return not any(marker in stripped for marker in python_write_or_exec_markers)
+        return False
+
+    def _tool_call_is_inspection(self, tool_name: str, argument: str) -> bool:
+        """判断工具调用是否只是检查上下文，而不是执行/写入/验证。"""
+        if tool_name in INSPECTION_TOOLS:
+            return True
+        if tool_name == "skills":
+            action = argument.strip().split(maxsplit=1)[0].lower() if argument.strip() else "list"
+            return action in {"list", "view"}
+        if tool_name == "terminal":
+            return self._terminal_is_read_only_inspection(argument)
+        return False
+
+    def _terminal_command_has_write_hint(self, argument: str) -> bool:
+        """在执行前识别明显会写文件的 terminal 命令。"""
+        lower_arg = argument.lower()
+        write_hints = (
+            "write_text",
+            ".write(",
+            "sed -i",
+            "perl -pi",
+            "tee ",
+            " > ",
+            ">>",
+            "--output",
+        )
+        return any(hint in lower_arg for hint in write_hints)
+
+    def _tool_call_may_write_deliverable(self, tool_name: str, argument: str) -> bool:
+        """判断下一步是否可能直接落盘交付物。"""
+        if tool_name in {"write_file", "patch_file"}:
+            return True
+        if tool_name == "terminal":
+            return self._terminal_command_has_write_hint(argument)
+        return False
+
+    def _tool_call_is_artifact_progress(self, tool_name: str, argument: str) -> bool:
+        """artifact scan 会写入 manifest，是长工作流的有效进展，不应被当作空转检查。"""
+        return tool_name == "artifact" and argument.strip().lower().startswith("scan")
+
+    def _mentions_incomplete_deliverable(self, text: str) -> bool:
+        """识别交付物中的显式未完成标记。
+
+        这是进度质量判断，而不是意图路由：只有当工具输出或写入内容自己声明
+        仍然是 TODO/占位/待补全时，主循环才会继续要求补写。单独出现
+        “draft/初稿”不算未完成，因为用户可能明确要草稿。
+        """
+        lowered = text.lower()
+        if re.search(r"\b(todo|tbd|placeholder|stub|incomplete)\b", lowered):
+            return True
+        return any(marker in lowered for marker in INCOMPLETE_DELIVERABLE_MARKERS)
+
+    def _extract_written_deliverable_content(self, tool_name: str, argument: str) -> str | None:
+        """从写入类工具参数中抽取将被落盘的内容片段。"""
+        if tool_name == "write_file" and ":::" in argument:
+            return argument.split(":::", 1)[1].strip()
+        if tool_name == "patch_file" and ":::" in argument:
+            return argument.rsplit(":::", 1)[1].strip()
+        return None
+
+    def _looks_like_empty_deliverable_content(self, content: str | None) -> bool:
+        """识别为了绕过进度约束而写入的空交付物。
+
+        这仍然是质量状态判断，不是意图路由。典型例子是 DailyTrack 中把
+        `papers.json` 写成 `[]`，虽然文件存在，但并没有满足“写入结果”的请求。
+        """
+        if content is None:
+            return False
+        stripped = content.strip()
+        if stripped in {"", "[]", "{}", "null"}:
+            return True
+        if re.fullmatch(r"(?is)#\s*[\w -]+\s*", stripped):
+            return True
+        return False
+
+    def _tool_call_writes_incomplete_deliverable(self, tool_name: str, argument: str, result: str) -> bool:
+        """判断刚刚写入的内容是否明显还只是占位交付物。"""
+        if tool_name in {"write_file", "patch_file"}:
+            written_content = self._extract_written_deliverable_content(tool_name, argument)
+            return self._mentions_incomplete_deliverable(argument) or self._looks_like_empty_deliverable_content(written_content)
+        if tool_name == "terminal" and self._terminal_command_has_write_hint(argument):
+            # 终端写入脚本常会包含 `if "TODO" in text` 这类清理逻辑。扫描整段
+            # command 会把“检查占位符”误判成“写入占位符”，导致已落盘的草稿
+            # 仍被 no-edit guard 当作未完成。终端写入后的未完成判断以工具输出
+            # 或后续 read/diff 观察为准。
+            return self._mentions_incomplete_deliverable(result)
+        return False
+
+    def _tool_result_shows_incomplete_deliverable(self, tool_name: str, argument: str, result: str, edit_already_happened: bool) -> bool:
+        """在已发生编辑后，识别后续检查是否读到了未完成交付物。"""
+        if not edit_already_happened:
+            return False
+        if tool_name in {"read", "read_lines"}:
+            body = result.split("\n\n", 1)[1] if "\n\n" in result else result
+            return self._mentions_incomplete_deliverable(result) or self._looks_like_empty_deliverable_content(body)
+        if tool_name == "terminal" and self._terminal_is_read_only_inspection(argument):
+            return self._mentions_incomplete_deliverable(result)
+        if tool_name == "validate_deliverable":
+            return result.startswith("DELIVERABLE_VALIDATION failed")
+        return False
 
     def _looks_like_failed_tool_result(self, result: str) -> bool:
         """识别已知工具失败文本，用于重复调用恢复逻辑。"""
@@ -727,6 +1250,7 @@ class SimpleAgent:
             f"{self._format_run_state(observations)}\n\n"
             f"You already read {argument!r}. Do not read the same file again in this run.\n"
             "Use the existing file content to decide the next step. If you need line-specific context, use read_lines. "
+            "If this is a repository workflow, proceed to the next executable command or to write_file/patch_file; do not keep rereading broad workflow files. "
             "If the user requested a code change, proceed with patch_file or write_file before running tests.\n\n"
             f"Previous read result:\n{result}"
         )
@@ -755,6 +1279,127 @@ class SimpleAgent:
             "If the change is genuinely impossible, explain the concrete blocker."
         )
 
+    def _inspection_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """长工作流中检查过多但没有写入时，要求 planner 执行或落盘。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed tool call {tool_name}({argument!r}) is another inspection step, but this run has already spent many steps inspecting files and skills without any successful write.\n"
+            f"Inspection budget block count in this run: {block_count}.\n"
+            "Do not keep reading workflow files, raw JSON, or source outputs with read/tree/skills or read-only terminal commands such as Python read_text/json.loads snippets. "
+            "The next step must be productive: write the deliverable with write_file/patch_file, or run a terminal/background command that directly creates or updates the requested output files. "
+            "If the collected evidence is incomplete, write a clearly marked draft from the observations already in run state instead of inspecting again. "
+            "Use terminal stdout/stderr already shown in the run state as observations."
+        )
+
+    def _background_wait_loop_message(self, original_message: str, argument: str, observations: List[str]) -> str:
+        """后台任务多次未结束时，阻止继续等待同一个任务。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed background command ({argument!r}) continues waiting on a long-running task. Do not wait again for the same background task now.\n"
+            "Use background tail to extract partial output if needed, background stop if the task has produced enough output or appears stuck, "
+            "or proceed to another independent source/write_file/patch_file step. For multi-repository workflows, prefer smaller independent background commands instead of one long chained command."
+        )
+
+    def _no_edit_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """长工作流迟迟没有落盘时，要求进入写入阶段。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed tool call {tool_name}({argument!r}) does not directly write the requested deliverable, "
+            f"but this run has already used many steps without a successful file edit. No-edit block count: {block_count}.\n"
+            "The next step must create or update the deliverable with write_file/patch_file, or a terminal command that clearly writes output files. "
+            "Do not inspect more context, do not launch more collection jobs, and do not wait for background tasks unless a requested output file has already been written. "
+            "Do not write empty placeholders such as [], {}, empty headings, or skeletal files just to satisfy the edit constraint. "
+            "If the evidence is incomplete, write a clearly marked but substantive draft from the current run observations."
+        )
+
+    def _post_edit_inspection_budget_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """已写入后仍持续检查时，要求进入补写、验证或结束。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"An edit has already succeeded, but the proposed tool call {tool_name}({argument!r}) is another inspection step. "
+            f"Post-edit inspection block count in this run: {block_count}.\n"
+            "Do not keep rereading style files, raw outputs, or the same deliverable after an edit. "
+            "If the edited deliverable contains TODO/placeholder/incomplete markers, empty JSON such as []/{}, or only a skeletal heading, patch or rewrite it now from the collected observations. "
+            "If it is complete, move to diff/tests/final text instead of inspecting again."
+        )
+
+    def _artifact_synthesis_message(self, original_message: str, tool_name: str, argument: str, observations: List[str], block_count: int = 1) -> str:
+        """已有 artifact manifest 后，阻止继续做宽泛检查，推动进入合成阶段。"""
+        artifacts = self._artifact_manifest_items()
+        artifact_lines = []
+        for item in artifacts[:10]:
+            bits = [str(item.get("path", "?")), str(item.get("kind", "file"))]
+            if "items" in item:
+                bits.append(f"items={item['items']}")
+            bits.append(f"bytes={item.get('bytes', 0)}")
+            artifact_lines.append("- " + " | ".join(bits))
+        artifact_summary = "\n".join(artifact_lines) if artifact_lines else "- artifact manifest was reported in recent tool output"
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The proposed tool call {tool_name}({argument!r}) is another inspection step after workflow artifacts have already been recorded. "
+            f"Artifact synthesis block count: {block_count}.\n"
+            "Do not keep reading broad raw/log/source files just to restate the same evidence. The next step should be one of: "
+            "run a project-local synthesis script that writes the requested deliverables, write_file/patch_file the deliverables from the recorded artifacts and observations, "
+            "or validate_deliverable if the deliverables already exist.\n"
+            "Recorded artifacts available for synthesis:\n"
+            f"{artifact_summary}"
+        )
+
+    def _background_task_id_from_argument(self, argument: str) -> str | None:
+        parts = argument.strip().split()
+        if len(parts) >= 2 and parts[0].lower() in {"wait", "status"}:
+            return parts[1]
+        return None
+
+    def _background_wait_task_id_from_argument(self, argument: str) -> str | None:
+        parts = argument.strip().split()
+        if len(parts) >= 2 and parts[0].lower() == "wait":
+            return parts[1]
+        return None
+
+    def _background_task_known_finished(self, task_id: str, observations: List[str]) -> bool:
+        patterns = (
+            rf"Background task {re.escape(task_id)} completed with exit code",
+            rf"Background task {re.escape(task_id)} is already complete",
+            rf"Stopped background task {re.escape(task_id)} with exit code",
+            rf"{re.escape(task_id)}: done exit=",
+            rf"{re.escape(task_id)} tail \(done exit=",
+        )
+        recent = "\n".join(observations[-8:])
+        return any(re.search(pattern, recent) for pattern in patterns)
+
+    def _background_running_task_id_from_result(self, result: str) -> str | None:
+        match = re.search(r"Background task (\S+) is still running after", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+): running,", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+) tail \(running\):", result)
+        if match:
+            return match.group(1)
+        return None
+
+    def _background_finished_task_id_from_result(self, result: str) -> str | None:
+        match = re.search(r"Background task (\S+) completed with exit code", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"Stopped background task (\S+) with exit code", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+): done exit=", result)
+        if match:
+            return match.group(1)
+        match = re.search(r"^(\S+) tail \(done exit=", result)
+        if match:
+            return match.group(1)
+        return None
+
     def _premature_test_message(self, original_message: str, text: str, observations: List[str]) -> str:
         """planner 在必需验证完成前试图结束时，构造恢复提示。"""
         return (
@@ -780,19 +1425,12 @@ class SimpleAgent:
         if "exit code: 0" not in result:
             return False
         lower_arg = argument.lower()
-        edit_hints = (
-            "write_text",
-            ".write(",
-            "sed -i",
-            "perl -pi",
-            "tee ",
-            "patched",
-            "overwrite",
-        )
-        return any(hint in lower_arg for hint in edit_hints)
+        return self._terminal_command_has_write_hint(argument) or "patched" in lower_arg or "overwrite" in lower_arg
 
     def _tool_result_is_successful_test(self, tool_name: str, argument: str, result: str) -> bool:
         """识别成功验证，并排除 “Ran 0 tests” 这类空跑。"""
+        if tool_name == "validate_deliverable":
+            return result.startswith("DELIVERABLE_VALIDATION ok")
         if "exit code: 0" not in result:
             return False
         if "Ran 0 tests" in result:
@@ -805,6 +1443,92 @@ class SimpleAgent:
     def _tool_result_is_diff(self, tool_name: str, result: str) -> bool:
         """跟踪成功编辑后是否已经检查过 diff。"""
         return tool_name == "diff" and not self._looks_like_failed_tool_result(result)
+
+    def _tool_result_has_artifacts(self, tool_name: str, result: str) -> bool:
+        """识别 artifact 工具是否已经记录到可用产物。"""
+        if tool_name != "artifact":
+            return False
+        found = re.search(r":\s*(\d+)\s+found", result)
+        total = re.search(r"Artifacts:\s*(\d+)", result)
+        recorded = re.search(r"(\d+)\s+recorded total", result)
+        counts = [int(match.group(1)) for match in (found, total, recorded) if match]
+        return any(count > 0 for count in counts)
+
+    def _written_path_from_tool_call(self, tool_name: str, argument: str) -> str | None:
+        """从写入工具参数中抽取目标路径，用来失效相关失败缓存。"""
+        if tool_name not in {"write_file", "patch_file"} or ":::" not in argument:
+            return None
+        path_text = argument.split(":::", 1)[0].strip()
+        return path_text or None
+
+    def _deliverable_fingerprint(self, argument: str) -> str:
+        """返回交付物内容指纹，用于判断验证失败后文件是否真的发生变化。"""
+        try:
+            parts = shlex.split(argument.strip())
+        except ValueError:
+            parts = argument.strip().split(maxsplit=1)
+        path_text = parts[0] if parts else ""
+        if not path_text:
+            return "missing:"
+        path = Path(path_text).expanduser()
+        if not path.is_absolute():
+            path = self.project_root / path
+        try:
+            return hashlib.sha256(path.resolve().read_bytes()).hexdigest()
+        except OSError:
+            return f"missing:{path}"
+
+    def _clear_failed_calls_for_written_path(self, failed_calls: dict[tuple[str, str], str], path_text: str | None) -> None:
+        """文件被创建/修改后，清理针对同一路径的旧失败记录。
+
+        典型场景：`validate_deliverable foo.json` 先因文件不存在失败，随后
+        `write_file foo.json` 创建文件。此时同一个 validation 调用已经不再是
+        “重复失败”，必须允许再次执行。
+        """
+        if not path_text:
+            return
+        normalized = path_text.strip()
+        for key in list(failed_calls):
+            tool_name, argument = key
+            first_arg = argument.strip().split(maxsplit=1)[0] if argument.strip() else ""
+            if tool_name in {"validate_deliverable", "read", "read_lines", "tree"} and first_arg == normalized:
+                failed_calls.pop(key, None)
+
+    def _validation_no_progress_message(
+        self,
+        original_message: str,
+        argument: str,
+        result: str,
+        observations: List[str],
+    ) -> str:
+        """验证失败后文件未变时，要求后端换修复策略而不是重复校验。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The deliverable is still failing validation for validate_deliverable({argument!r}), and the target file content has not changed since the previous failed validation.\n"
+            f"Previous validation failure:\n{result}\n\n"
+            "Do not run validate_deliverable again yet, and do not rerun the same generic rebuild script. "
+            "First make a concrete content-changing repair with write_file or patch_file. If you must use terminal, the command must rewrite the target from grounded source data and print the resulting byte count; then inspect or validate only after the file content changed. "
+            "Address the exact errors above, especially size, empty table cells, placeholder markers, missing required fields, or too few JSON items."
+        )
+
+    def _backend_after_tool_retry_message(
+        self,
+        original_message: str,
+        last_tool_used: str,
+        last_text: str,
+        error: Exception,
+        observations: List[str],
+    ) -> str:
+        """后端在工具结果后偶发返回非法 planner JSON 时，构造可恢复重试上下文。"""
+        return (
+            f"Original user request:\n{original_message}\n\n"
+            f"{self._format_run_state(observations)}\n\n"
+            f"The previous tool was {last_tool_used} and returned:\n{self._planner_tool_result(last_tool_used, last_text)}\n\n"
+            f"The planner response failed to parse as strict JSON: {error}\n\n"
+            "Continue the task from the tool result above and return strict JSON only. "
+            "If the last source collection failed because of a missing optional dependency, either repair the dependency with a project-local venv or proceed with already collected sources; do not end the task with the dependency error as the final answer."
+        )
 
     def _record_assistant_text(self, text: str) -> None:
         """把最终 assistant 文本写入当前会话。"""
@@ -858,9 +1582,21 @@ class SimpleAgent:
         last_tool_used: Optional[str] = None
         last_text = ""
         failed_calls: dict[tuple[str, str], str] = {}
+        validation_failures: dict[str, tuple[str, int, str]] = {}
         completed_inspections: dict[tuple[str, str], str] = {}
         run_observations: List[str] = []
         blocked_repeats = 0
+        backend_error_retries = 0
+        blocked_successful_inspections = 0
+        inspection_steps_without_progress = 0
+        inspection_budget_blocks = 0
+        no_edit_budget_blocks = 0
+        post_edit_inspection_steps = 0
+        post_edit_budget_blocks = 0
+        artifact_manifest_available = bool(self._artifact_manifest_items())
+        artifact_inspection_steps = 0
+        artifact_synthesis_blocks = 0
+        background_still_running_counts: dict[str, int] = {}
         requires_edit = bool(
             active_task is not None
             and active_task.get("category") == "coding"
@@ -868,13 +1604,34 @@ class SimpleAgent:
         )
         requires_test = False
         successful_edit = False
+        deliverable_needs_completion = False
         inspected_diff = False
         successful_test = False
         for step in range(1, self.max_steps + 1):
+            background_events = self.tool_impl.drain_background_events()
+            if background_events:
+                event_observation = self._compact_observation("background_event", "", background_events)
+                run_observations.append(event_observation)
+                emit(AgentTraceStep(step=step, kind="background_event", content=background_events, tool_name="background"))
+                if self._artifact_manifest_items():
+                    artifact_manifest_available = True
+                current_message = self._background_event_message(original_message, background_events, run_observations)
             try:
-                decision = self.plan(current_message, allow_explicit_tools=(step == 1))
+                decision = self.plan(current_message, allow_explicit_tools=(step == 1), exclude_latest_user_message=message)
             except Exception as e:
                 if last_tool_used is not None and last_text:
+                    backend_error_retries += 1
+                    if backend_error_retries <= 2:
+                        retry_message = self._backend_after_tool_retry_message(
+                            original_message,
+                            last_tool_used,
+                            last_text,
+                            e,
+                            run_observations,
+                        )
+                        emit(AgentTraceStep(step=step, kind="backend_error_retry", content=retry_message, tool_name=last_tool_used))
+                        current_message = retry_message
+                        continue
                     fallback_text = f"{last_text}\n\nBackend planning failed after the tool result: {e}"
                     self._record_assistant_text(fallback_text)
                     emit(AgentTraceStep(step=step, kind="backend_error_fallback", content=fallback_text, tool_name=last_tool_used))
@@ -886,20 +1643,29 @@ class SimpleAgent:
                 emit(AgentTraceStep(step=step, kind="backend_error_fallback", content=error_text))
                 self._maybe_compress_history()
                 return AgentResponse(final_response=fallback_text, tool_used=last_tool_used, steps=step, trace=trace)
+            backend_error_retries = 0
+            if decision.tool_call is not None:
+                decision.tool_call = self._normalize_tool_call(decision.tool_call)
             requires_edit = requires_edit or decision.requires_edit
             requires_test = requires_test or decision.requires_test
             if requires_edit and active_task is None:
                 active_task = self._start_active_task(message)
                 emit(AgentTraceStep(step=step, kind="task_frame_started", content=f"{active_task.get('id')}: {active_task.get('goal')}"))
             emit(AgentTraceStep(step=step, kind=decision.kind, content=self._trace_decision_content(decision), tool_name=decision.tool_call.name if decision.tool_call else None))
+            edit_is_complete = successful_edit and not deliverable_needs_completion
             if decision.tool_call is None:
-                if requires_edit and not successful_edit:
+                if requires_edit and not edit_is_complete:
                     self._set_active_task_status("in_progress")
                     recovery_message = self._premature_text_message(original_message, decision.text, run_observations)
+                    if deliverable_needs_completion:
+                        recovery_message += (
+                            "\n\nA previous edit appears to have written a placeholder, TODO, or incomplete deliverable. "
+                            "Do not claim completion yet; patch or rewrite the deliverable first."
+                        )
                     emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
-                if requires_edit and successful_edit and not inspected_diff:
+                if requires_edit and edit_is_complete and not inspected_diff:
                     emit(AgentTraceStep(step=step, kind="tool_call", content="Auto-inspect diff before final text.", tool_name="diff"))
                     result = self.tools.run("diff", "")
                     last_tool_used = "diff"
@@ -913,13 +1679,47 @@ class SimpleAgent:
                     emit(AgentTraceStep(step=step, kind="premature_text_blocked", content=recovery_message))
                     current_message = recovery_message
                     continue
-                if successful_edit:
+                if edit_is_complete:
                     self._set_active_task_status("completed")
                 self._record_assistant_text(decision.text)
                 self._maybe_compress_history()
                 return AgentResponse(final_response=decision.text, tool_used=last_tool_used, steps=step, trace=trace)
 
             call_key = (decision.tool_call.name, decision.tool_call.argument)
+            if decision.tool_call.name == "background":
+                task_id = self._background_wait_task_id_from_argument(decision.tool_call.argument)
+                if (
+                    task_id
+                    and background_still_running_counts.get(task_id, 0) >= 3
+                    and not self._background_task_known_finished(task_id, run_observations)
+                ):
+                    recovery_message = self._background_wait_loop_message(original_message, decision.tool_call.argument, run_observations)
+                    emit(AgentTraceStep(step=step, kind="background_wait_loop_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                    current_message = recovery_message
+                    continue
+            if decision.tool_call.name == "validate_deliverable":
+                validation_state = validation_failures.get(decision.tool_call.argument)
+                if validation_state:
+                    fingerprint, failure_count, previous_result = validation_state
+                    if fingerprint == self._deliverable_fingerprint(decision.tool_call.argument) and failure_count >= 2:
+                        blocked_repeats += 1
+                        recovery_message = self._validation_no_progress_message(
+                            original_message,
+                            decision.tool_call.argument,
+                            previous_result,
+                            run_observations,
+                        )
+                        emit(AgentTraceStep(step=step, kind="validation_no_progress_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                        if blocked_repeats >= 3:
+                            error_text = (
+                                "Stopped because the backend kept re-validating a deliverable without changing the file content. "
+                                f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r})."
+                            )
+                            self._record_assistant_text(error_text)
+                            self._maybe_compress_history()
+                            return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                        current_message = recovery_message
+                        continue
             if call_key in failed_calls:
                 blocked_repeats += 1
                 recovery_message = self._repeated_failure_message(
@@ -941,7 +1741,119 @@ class SimpleAgent:
                 current_message = recovery_message
                 continue
             inspection_key = self._inspection_call_key(decision.tool_call.name, decision.tool_call.argument)
-            if decision.tool_call.name in INSPECTION_TOOLS and inspection_key in completed_inspections:
+            is_inspection_call = self._tool_call_is_inspection(decision.tool_call.name, decision.tool_call.argument)
+            if (
+                requires_edit
+                and not successful_edit
+                and step >= WORKFLOW_NO_EDIT_STEP_BUDGET
+                and not self._tool_call_may_write_deliverable(decision.tool_call.name, decision.tool_call.argument)
+                and not self._tool_call_is_artifact_progress(decision.tool_call.name, decision.tool_call.argument)
+            ):
+                no_edit_budget_blocks += 1
+                recovery_message = self._no_edit_budget_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    no_edit_budget_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="no_edit_budget_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if no_edit_budget_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept proposing non-writing tool calls after the no-edit workflow budget was exhausted. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "A follow-up run should write or patch the requested deliverable from the collected observations."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
+            if (
+                requires_edit
+                and not successful_edit
+                and artifact_manifest_available
+                and is_inspection_call
+                and artifact_inspection_steps >= WORKFLOW_ARTIFACT_SYNTHESIS_BUDGET
+            ):
+                artifact_synthesis_blocks += 1
+                recovery_message = self._artifact_synthesis_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    artifact_synthesis_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="artifact_synthesis_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if artifact_synthesis_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept inspecting after artifact outputs were already recorded. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "A follow-up run should synthesize, write, or validate the requested deliverables from the artifact manifest."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
+            if (
+                requires_edit
+                and not edit_is_complete
+                and is_inspection_call
+                and inspection_steps_without_progress >= WORKFLOW_INSPECTION_BUDGET
+            ):
+                inspection_budget_blocks += 1
+                recovery_message = self._inspection_budget_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    inspection_budget_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="inspection_budget_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if inspection_budget_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept proposing inspection-only tool calls after the workflow inspection budget was exhausted. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "The next successful run should write or patch the requested deliverable instead of reading more context."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
+            if (
+                requires_edit
+                and edit_is_complete
+                and is_inspection_call
+                and post_edit_inspection_steps >= WORKFLOW_POST_EDIT_INSPECTION_BUDGET
+            ):
+                post_edit_budget_blocks += 1
+                recovery_message = self._post_edit_inspection_budget_message(
+                    original_message,
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    run_observations,
+                    post_edit_budget_blocks,
+                )
+                emit(AgentTraceStep(step=step, kind="post_edit_inspection_blocked", content=recovery_message, tool_name=decision.tool_call.name))
+                if post_edit_budget_blocks >= 4:
+                    error_text = (
+                        "Stopped because the backend kept proposing inspection-only tool calls after a successful edit. "
+                        f"Last blocked call: {decision.tool_call.name}({decision.tool_call.argument!r}). "
+                        "A follow-up run should patch any incomplete deliverable, run verification, or return final text."
+                    )
+                    self._record_assistant_text(error_text)
+                    self._maybe_compress_history()
+                    return AgentResponse(final_response=error_text, tool_used=last_tool_used, steps=step, trace=trace)
+                current_message = recovery_message
+                continue
+            if is_inspection_call and inspection_key in completed_inspections:
+                blocked_successful_inspections += 1
+                if successful_edit and not deliverable_needs_completion:
+                    post_edit_inspection_steps += 1
+                else:
+                    inspection_steps_without_progress += 1
                 if decision.tool_call.name == "read":
                     recovery_message = self._repeated_read_message(
                         original_message,
@@ -956,6 +1868,12 @@ class SimpleAgent:
                         decision.tool_call.argument,
                         completed_inspections[inspection_key],
                         run_observations,
+                    )
+                if blocked_successful_inspections >= 4:
+                    recovery_message += (
+                        "\n\nYou are stuck in an inspection loop. For the next step, do not call read, tree, glob, search, "
+                        "or project_overview unless you name a genuinely new, narrower path. Prefer terminal/background for the next script command, "
+                        "or write_file/patch_file if enough information has been collected. Use terminal stdout directly; do not use shell redirection."
                     )
                 emit(AgentTraceStep(step=step, kind="repeated_tool_blocked", content=recovery_message, tool_name=decision.tool_call.name))
                 current_message = recovery_message
@@ -974,14 +1892,88 @@ class SimpleAgent:
             self._record_tool_result(decision.tool_call.name, result)
             emit(AgentTraceStep(step=step, kind="tool_result", content=result, tool_name=decision.tool_call.name))
             run_observations.append(self._compact_observation(decision.tool_call.name, decision.tool_call.argument, result))
+            if self._artifact_manifest_items():
+                artifact_manifest_available = True
+            if decision.tool_call.name == "validate_deliverable" and result.startswith("DELIVERABLE_VALIDATION ok"):
+                deliverable_needs_completion = False
+                validation_failures.pop(decision.tool_call.argument, None)
+            elif self._tool_result_shows_incomplete_deliverable(
+                decision.tool_call.name,
+                decision.tool_call.argument,
+                result,
+                successful_edit,
+            ):
+                deliverable_needs_completion = True
+            if decision.tool_call.name == "validate_deliverable" and result.startswith("DELIVERABLE_VALIDATION failed"):
+                fingerprint = self._deliverable_fingerprint(decision.tool_call.argument)
+                previous = validation_failures.get(decision.tool_call.argument)
+                count = previous[1] + 1 if previous and previous[0] == fingerprint else 1
+                validation_failures[decision.tool_call.argument] = (fingerprint, count, result)
             if self._looks_like_failed_tool_result(result):
                 failed_calls[call_key] = result
+            elif decision.tool_call.name == "artifact":
+                artifact_manifest_available = artifact_manifest_available or self._tool_result_has_artifacts(decision.tool_call.name, result)
+                artifact_inspection_steps = 0
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
+            elif decision.tool_call.name == "background":
+                inspection_steps_without_progress = 0
+                artifact_inspection_steps = 0
+                running_task_id = self._background_running_task_id_from_result(result)
+                if running_task_id:
+                    background_still_running_counts[running_task_id] = background_still_running_counts.get(running_task_id, 0) + 1
+                else:
+                    finished_task_id = self._background_finished_task_id_from_result(result)
+                    if finished_task_id:
+                        background_still_running_counts.pop(finished_task_id, None)
             elif decision.tool_call.name in {"write_file", "patch_file"}:
                 successful_edit = True
+                self._clear_failed_calls_for_written_path(
+                    failed_calls,
+                    self._written_path_from_tool_call(decision.tool_call.name, decision.tool_call.argument),
+                )
+                deliverable_needs_completion = self._tool_call_writes_incomplete_deliverable(
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    result,
+                )
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
+                no_edit_budget_blocks = 0
+                post_edit_inspection_steps = 0
+                post_edit_budget_blocks = 0
+                artifact_inspection_steps = 0
+                artifact_synthesis_blocks = 0
             elif decision.tool_call.name == "terminal" and self._terminal_may_have_edited(decision.tool_call.argument, result):
                 successful_edit = True
-            elif decision.tool_call.name in INSPECTION_TOOLS:
+                deliverable_needs_completion = self._tool_call_writes_incomplete_deliverable(
+                    decision.tool_call.name,
+                    decision.tool_call.argument,
+                    result,
+                )
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
+                no_edit_budget_blocks = 0
+                post_edit_inspection_steps = 0
+                post_edit_budget_blocks = 0
+                artifact_inspection_steps = 0
+                artifact_synthesis_blocks = 0
+            elif self._tool_call_is_inspection(decision.tool_call.name, decision.tool_call.argument):
                 completed_inspections[inspection_key] = result
+                blocked_successful_inspections = 0
+                if artifact_manifest_available and not successful_edit:
+                    artifact_inspection_steps += 1
+                if successful_edit and not deliverable_needs_completion:
+                    post_edit_inspection_steps += 1
+                else:
+                    inspection_steps_without_progress += 1
+            else:
+                inspection_steps_without_progress = 0
+                inspection_budget_blocks = 0
+                artifact_inspection_steps = 0
+                if successful_edit:
+                    post_edit_inspection_steps = 0
+                    post_edit_budget_blocks = 0
             if self._tool_result_is_successful_test(decision.tool_call.name, decision.tool_call.argument, result):
                 successful_test = True
             if self._tool_result_is_diff(decision.tool_call.name, result):

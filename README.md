@@ -11,11 +11,17 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 - 可选 OpenAI-compatible backend。
 - 可选 Hermes runtime bridge：复用 Hermes 的 provider/auth 解析。
 - 代码工具：`read`、`read_lines`、`tree`、`glob`、`project_overview`、`search`、`write_file`、`patch_file`、`diff`、`terminal`、`run_tests`。
+- 扩展工具雏形：`fetch_url`、`dependency_scan`、`credential_audit`。`credential_audit` 只列路径，不读取或打印密钥内容。
 - 后台任务工具：`background start/list/status/tail/wait/stop`。
 - 持久化 memory：general memory 和 user profile memory 分开存。
-- SQLite 会话历史：记录 `kind`、`tool_name`、session lineage、descendants 和 focused recall。
+- SQLite 会话历史：记录 `kind`、`tool_name`、session lineage、descendants、focused recall 和 cross-session recall。
+- 通用 workflow ledger：复杂任务可用 `todo write/add/update/list/clear` 保存阶段进度，并在后续 planner prompt 中恢复 pending/in_progress 状态。
 - 长期会话：默认按 project root 生成稳定 session id，并自动恢复最新 continuation。
 - 上下文压缩：结构化 handoff summary，包含 goal、constraints、progress、files、remaining work。
+- 本地 skills 雏形：用 `skills create/view/use/list/delete` 管理 Markdown skill，并可加载到当前 session context。
+- cron 雏形：用 `cron add/list/run-due/run/delete` 保存和触发轻量 scheduled tasks。
+- MCP-like 会话导出：用 `mcp resources/sessions/session/search` 导出 session 数据，导出路径会做密钥文本脱敏。
+- 本地进化闭环雏形：`experience record/list/view/summarize` 保存结构化经验卡；`validate_deliverable` 和 `run_tests` 失败会自动记录经验；`skills propose/candidates/view-candidate/promote` 支持候选 skill，经显式晋升后才进入稳定 skill。
 - delegation 骨架：child sessions、child-agent summary、parallel delegation、depth limits、child tool restrictions。
 - 可配置权限与工具 allowlist。
 - Code-agent benchmark fixtures：覆盖单轮、多轮、JavaScript、Python、多文件修改任务。
@@ -24,15 +30,17 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 ## 非目标
 
 - 不是生产级 sandbox。
-- 没有实现 MCP、browser automation、gateway adapters、cron、完整 provider fallback orchestration。
+- 没有实现完整 MCP server、browser automation、gateway adapters、常驻 cron daemon、完整 provider fallback orchestration。
 - 默认权限偏宽松，适合本机实验；在不可信项目上使用前应先打开 restrictive 配置。
 
 ## 图
 
 图和实现细节说明统一放在 `M_docs/`。Excalidraw 源文件和 SVG companion 由 `python3 render_diagrams.py` 批量生成。
 
+- [自进化 Agent Survey](Survey/README.md)
 - [M_docs 总览](M_docs/README.md)
 - [实现细节 Mermaid 图](M_docs/IMPLEMENTATION_DETAILS.md)
+- [改进历史](M_docs/IMPROVEMENT_HISTORY.md)
 - [总体架构](M_docs/simple-hermes-architecture.svg)
 - [请求时序](M_docs/simple-hermes-request-sequence.svg)
 - [长期会话、上下文压缩与后台任务](M_docs/simple-hermes-session-compression-background.svg)
@@ -143,14 +151,66 @@ export SIMPLE_HERMES_COMPRESSION_THRESHOLD=40
 ```text
 history
 recall active_items
+recall_all active_items
 sessions
 lineage
 descendants
 ```
 
+## Skills、Cron 与 MCP-like 导出
+
+这三块目前是第一版本地能力，不是完整 Hermes 复刻。
+
+Skills 存在 `~/.simple_hermes_codex/skills/`，也可以通过 `SIMPLE_HERMES_SKILLS_DIR` 改位置。候选 skill 默认存在 `~/.simple_hermes_codex/skill_candidates/`，也可以通过 `SIMPLE_HERMES_SKILL_CANDIDATES_DIR` 改位置：
+
+```text
+skills create code-review ::: 先列主要问题，再给简短修改建议
+skills list
+skills view code-review
+skills use code-review
+skills propose code-review from=exp-xxx reason='测试失败沉淀' ::: # code-review
+skills candidates
+skills view-candidate <candidate-id>
+skills promote <candidate-id>
+```
+
+`skills promote` 会拒绝仍包含 TODO、占位符或空 arXiv 链接等明显未完成内容的候选，避免坏经验直接污染稳定 skill。
+
+经验卡存在项目内 `.simple_hermes/evolution/<session-hash>/experience.jsonl`：
+
+```text
+experience record status=failed failure_type=test_failure goal='修复测试' ::: AssertionError ...
+experience list
+experience view <experience-id>
+experience summarize
+```
+
+这个机制不是训练式 RL，而是最小本地进化闭环：失败先变成可审计经验，再由经验生成候选 skill，最后通过显式 promote 进入稳定能力。
+
+Cron jobs 存在 `~/.simple_hermes_codex/cron_jobs.json`，也可以通过 `SIMPLE_HERMES_CRON_PATH` 改位置。当前没有内置常驻 daemon，外部定时调用 `cron run-due` 即可触发到期任务：
+
+```text
+cron add nightly-check every 86400 ::: tool:run_tests
+cron list
+cron run-due
+cron run <id>
+cron delete <id>
+```
+
+MCP-like 导出先提供 JSON 资源形态，方便后续接真实 MCP server：
+
+```text
+mcp resources
+mcp sessions
+mcp session <session-id>
+mcp search active_items
+```
+
+`mcp session` 和 `mcp search` 会对常见 `api_key/token/secret/password` 形态和 `sk-...` token 做脱敏。这个保护不替代敏感文件权限配置；如果不希望 agent 读取敏感文件，应同时启用 restricted profile。
+
 ## 后台任务
 
-后台任务会在 project root 下运行受保护的 shell command，并捕获 stdout/stderr。任务完成后，结果会作为 `background_result` 写回当前 session history，之后可以通过 `history` 或 `recall` 看到。
+后台任务会在 project root 下运行受保护的 shell command，并捕获 stdout/stderr。任务完成后，结果会作为 `background_result` 写回当前 session history，之后可以通过 `history` 或 `recall` 看到。agent 主循环也会在下一次规划前自动接收完成事件，把它作为 run state 注入 planner，因此模型不需要反复 `background wait` 才能知道任务已经结束。
 
 例子：
 
@@ -182,6 +242,14 @@ remember project uses sqlite
 remember_user I prefer concise review drafts
 delegate read README.md
 parallel_delegate read README.md ; summarize this project
+recall_all sqlite
+todo write [{"id":"inspect","content":"Inspect project instructions","status":"in_progress"}]
+todo update inspect completed
+skills list
+cron list
+mcp resources
+dependency_scan
+credential_audit
 ```
 
 ## CLI 快捷命令

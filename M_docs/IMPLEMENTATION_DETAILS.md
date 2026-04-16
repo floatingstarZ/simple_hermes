@@ -24,7 +24,7 @@ flowchart TB
     Tools --> ReadTools["读项目\nread / read_lines / tree / glob / search / project_overview"]
     Tools --> EditTools["改项目\nwrite_file / patch_file / terminal"]
     Tools --> VerifyTools["验证\ndiff / run_tests / terminal"]
-    Tools --> ContinuityTools["连续性\nhistory / recall / lineage / sessions / descendants"]
+    Tools --> ContinuityTools["连续性\nhistory / recall / lineage / sessions / descendants / todo"]
     Tools --> BackgroundTools["后台任务\nbackground start/list/status/tail/wait/stop"]
     Tools --> DelegateTools["子任务\ndelegate / parallel_delegate"]
 
@@ -119,7 +119,30 @@ flowchart TD
     Followup --> Loop
 ```
 
-## 4. 代码任务 guard 和恢复路径
+## 4. 通用工作流 ledger
+
+```mermaid
+flowchart TD
+    UserTask["复杂任务\n多阶段收集/编辑/验证"] --> PromptRule["planner prompt\n要求使用 todo ledger"]
+    PromptRule --> TodoWrite["todo write JSON phases\n只允许一个 in_progress"]
+    TodoWrite --> State["SessionStore.session_state\nkey=todo_list"]
+    State --> MemoryBlock["_backend_memory_block()"]
+    MemoryBlock --> Inject["Current workflow todo ledger\n只注入 pending/in_progress"]
+    Inject --> Planner["下一轮 planner"]
+    Planner --> Work["执行真实工具\nread / terminal / write_file / run_tests"]
+    Work --> TodoUpdate["todo update\n完成当前阶段并推进下一阶段"]
+    TodoUpdate --> State
+```
+
+这个机制来自对 Hermes/Codex trace 的对比：稳定的 code agent 不只靠 prompt 热情，而是需要一个显式、可持久、会被下一轮 planner 看见的进度结构。
+
+- `todo` 是通用 session 工具，不包含任何 DailyTrack 专用关键词或偏好。
+- `todo_list` 存在 `SessionStore` 的 state 表里，随当前 session 持久化。
+- planner 负责决定何时创建阶段、何时推进阶段；Python 主循环只负责保存、校验并注入上下文。
+- 已完成阶段不会反复注入，减少模型在长任务里重新做 broad inspection。
+- `todo update`、`todo add` 这类复合工具名会被 `_normalize_tool_call()` 归一化，避免模型把动作写进 tool name 后工具层无法执行。
+
+## 5. 代码任务 guard 和恢复路径
 
 ```mermaid
 stateDiagram-v2
@@ -150,7 +173,7 @@ stateDiagram-v2
     RepeatedFailureBlocked --> ToolPlanning: 换路径/换工具/换策略
 ```
 
-## 5. Planner backend 模式
+## 6. Planner backend 模式
 
 ```mermaid
 flowchart LR
@@ -174,7 +197,7 @@ flowchart LR
     Parse --> Decision["PlannerDecision\nkind=text 或 tool_call"]
 ```
 
-## 6. ToolRegistry 和权限路径
+## 7. ToolRegistry 和权限路径
 
 ```mermaid
 flowchart TB
@@ -204,7 +227,7 @@ flowchart TB
     BackgroundGuard --> Spawn["subprocess.Popen(shell=True)\nstdout/stderr 合流"]
 ```
 
-## 7. 状态持久化关系
+## 8. 状态持久化关系
 
 ```mermaid
 erDiagram
@@ -244,7 +267,7 @@ erDiagram
     }
 ```
 
-## 8. Active task 多轮连续性
+## 9. Active task 多轮连续性
 
 ```mermaid
 flowchart TD
@@ -266,7 +289,7 @@ flowchart TD
     Done -->|no| Keep["保持 in_progress"]
 ```
 
-## 9. 上下文压缩和 continuation session
+## 10. 上下文压缩和 continuation session
 
 ```mermaid
 sequenceDiagram
@@ -295,7 +318,7 @@ sequenceDiagram
     end
 ```
 
-## 10. Background task 生命周期
+## 11. Background task 生命周期
 
 ```mermaid
 flowchart TD
@@ -317,7 +340,7 @@ flowchart TD
     Task --> Stop["background stop <id>"]
 ```
 
-## 11. Delegation 和 parallel delegation
+## 12. Delegation 和 parallel delegation
 
 ```mermaid
 flowchart TB
@@ -341,7 +364,7 @@ flowchart TB
     WorkerN --> Joined
 ```
 
-## 12. Benchmark harness
+## 13. Benchmark harness
 
 ```mermaid
 flowchart TD
@@ -358,7 +381,7 @@ flowchart TD
     FinalTest --> Summary["summary.json\nready / passed / agent result / test result"]
 ```
 
-## 13. 一次复杂代码修改任务的完整闭环
+## 14. 一次复杂代码修改任务的完整闭环
 
 ```mermaid
 sequenceDiagram
@@ -405,7 +428,7 @@ sequenceDiagram
     CLI-->>U: final panel
 ```
 
-## 14. 文件到职责映射
+## 15. 文件到职责映射
 
 ```mermaid
 flowchart LR
@@ -449,7 +472,7 @@ flowchart LR
     CLI --> UI7["checkpoint commands\n/checkpoint /rollback /undo"]
 ```
 
-## 15. Slash session commands
+## 16. Slash session commands
 
 ```mermaid
 flowchart TD
@@ -482,7 +505,7 @@ flowchart TD
     Kind -->|/rollback 或 /undo| Rollback["CheckpointStore.restore()"]
 ```
 
-## 16. Checkpoint / rollback
+## 17. Checkpoint / rollback
 
 ```mermaid
 flowchart TD
@@ -498,7 +521,7 @@ flowchart TD
     Remove --> Report
 ```
 
-## 17. HTML test report
+## 18. HTML test report
 
 ```mermaid
 flowchart LR

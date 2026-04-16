@@ -1,6 +1,9 @@
 import os
+import shlex
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from simple_hermes.agent import AgentTraceStep, PlannerDecision, SimpleAgent, ToolCall
@@ -59,6 +62,44 @@ class ErrorAfterFirstToolBackend:
         raise RuntimeError("backend exploded")
 
 
+class RecoverAfterToolErrorBackend:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def plan(self, *, message: str, memory_block: str, history_text: str, tools_text: str) -> PlannerDecision:
+        self.calls.append(
+            {
+                "message": message,
+                "memory_block": memory_block,
+                "history_text": history_text,
+                "tools_text": tools_text,
+            }
+        )
+        if len(self.calls) == 1:
+            return PlannerDecision(kind="tool_call", text="read file", tool_call=ToolCall(name="read", argument="README.md"))
+        if len(self.calls) == 2:
+            raise RuntimeError("invalid planner json")
+        return PlannerDecision(kind="text", text="continued after backend retry", tool_call=None)
+
+
+class CompactRetryBackend:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def plan(self, *, message: str, memory_block: str, history_text: str, tools_text: str) -> PlannerDecision:
+        self.calls.append(
+            {
+                "message": message,
+                "memory_block": memory_block,
+                "history_text": history_text,
+                "tools_text": tools_text,
+            }
+        )
+        if len(self.calls) == 1:
+            raise RuntimeError("peer closed connection without sending complete message body")
+        return PlannerDecision(kind="text", text="compact retry succeeded", tool_call=None)
+
+
 class BackendResponseParsingTests(unittest.TestCase):
     def test_parse_response_text_accepts_brief_explanation_around_json(self) -> None:
         decision = OpenAICompatibleBackend._parse_response_text(
@@ -86,6 +127,55 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertEqual(decision.kind, "text")
         self.assertEqual(decision.text, "Done.")
 
+    def test_backend_retry_helper_retries_transient_connection_errors(self) -> None:
+        calls = {"count": 0}
+
+        def flaky_operation():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("peer closed connection without sending complete message body")
+            return "ok"
+
+        os.environ["SIMPLE_HERMES_BACKEND_RETRIES"] = "1"
+        try:
+            self.assertEqual(OpenAICompatibleBackend._with_retries(flaky_operation), "ok")
+        finally:
+            os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
+        self.assertEqual(calls["count"], 2)
+
+    def test_backend_retry_helper_retries_provider_request_id_errors(self) -> None:
+        calls = {"count": 0}
+
+        def provider_error_then_ok():
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError(
+                    "An error occurred while processing your request. Please include the request ID abc in your message."
+                )
+            return "ok"
+
+        os.environ["SIMPLE_HERMES_BACKEND_RETRIES"] = "1"
+        try:
+            self.assertEqual(OpenAICompatibleBackend._with_retries(provider_error_then_ok), "ok")
+        finally:
+            os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
+        self.assertEqual(calls["count"], 2)
+
+    def test_backend_retry_helper_does_not_retry_parse_errors(self) -> None:
+        calls = {"count": 0}
+
+        def bad_operation():
+            calls["count"] += 1
+            raise ValueError("Planner response did not contain JSON")
+
+        os.environ["SIMPLE_HERMES_BACKEND_RETRIES"] = "3"
+        try:
+            with self.assertRaises(ValueError):
+                OpenAICompatibleBackend._with_retries(bad_operation)
+        finally:
+            os.environ.pop("SIMPLE_HERMES_BACKEND_RETRIES", None)
+        self.assertEqual(calls["count"], 1)
+
     def test_planner_prompt_prefers_single_line_patch_file_format(self) -> None:
         prompt = build_planner_prompt(
             PromptContext(
@@ -105,6 +195,23 @@ class BackendResponseParsingTests(unittest.TestCase):
         self.assertIn("autonomous coding assistant", prompt)
         self.assertIn("requires_edit", prompt)
         self.assertIn("requires_test", prompt)
+        self.assertIn("project-level context", prompt)
+        self.assertIn("relevant SKILL.md", prompt)
+        self.assertIn("Do not hardcode repository-specific tracking preferences", prompt)
+        self.assertIn("project-local skills under the current repository's skills/", prompt)
+        self.assertIn("placeholder/TODO/incomplete deliverables", prompt)
+        self.assertIn("todo ledger", prompt)
+        self.assertIn("one phase in_progress", prompt)
+        self.assertIn("mark it completed", prompt)
+        self.assertIn("raw artifacts and a target draft", prompt)
+        self.assertIn("Do not use shell redirection", prompt)
+        self.assertIn("runtime completion events", prompt)
+        self.assertIn("documented --output arguments", prompt)
+        self.assertIn("artifact scan", prompt)
+        self.assertIn("current artifact manifest", prompt)
+        self.assertIn("validate_deliverable", prompt)
+        self.assertIn("rebuild the deliverable from the listed raw/artifact files", prompt)
+        self.assertIn("two-script shape", prompt)
 
     def test_planner_system_message_pushes_autonomous_tool_use(self) -> None:
         self.assertIn("autonomous planning layer", PLANNER_SYSTEM_MESSAGE)
@@ -172,6 +279,15 @@ class AgentPlanningTests(unittest.TestCase):
         result = self.agent.run("remember_user user likes diagrams")
         self.assertEqual(result.tool_used, "remember_user")
         self.assertIn("Saved user memory", result.final_response)
+
+    def test_agent_runs_experience_command(self) -> None:
+        result = self.agent.run("experience record status=failed failure_type=smoke ::: evidence line")
+        self.assertEqual(result.tool_used, "experience")
+        self.assertIn("Recorded experience", result.final_response)
+
+        summary = self.agent.run("experience summarize")
+        self.assertEqual(summary.tool_used, "experience")
+        self.assertIn('"smoke": 1', summary.final_response)
 
     def test_agent_fallback_message_for_unknown_intent(self) -> None:
         result = self.agent.run("write me a poem")
@@ -241,6 +357,130 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("Available tools:", call["tools_text"])
         self.assertIn("[user](user_message) history", call["history_text"])
         self.assertNotIn("tool_result", call["history_text"])
+
+    def test_backend_history_excludes_current_user_message_during_run(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="backend answer", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_current_history",
+            backend=backend,
+        )
+        agent.sessions.append("user", "previous context", session_id=agent.session_id, kind="user_message")
+
+        agent.run("current daily track request")
+
+        self.assertEqual(agent.sessions.last_user_message(agent.session_id), "current daily track request")
+        call = backend.calls[-1]
+        self.assertIn("[user](user_message) previous context", call["history_text"])
+        self.assertNotIn("current daily track request", call["history_text"])
+
+    def test_backend_receives_project_instructions_and_skill_summaries_without_secrets(self) -> None:
+        (self.project_root / "AGENTS.md").write_text(
+            "@CLAUDE.md\nTreat daily track as the full repository workflow.\napi_key = TEST_API_KEY_VALUE\n",
+            encoding="utf-8",
+        )
+        (self.project_root / "CLAUDE.md").write_text(
+            "Claude workflow detail from referenced instruction file.\n",
+            encoding="utf-8",
+        )
+        (self.project_root / "MEMORY.md").write_text(
+            "Track date defaults to previous Beijing day. token=TEST_GITHUB_TOKEN_VALUE\n",
+            encoding="utf-8",
+        )
+        skill_dir = self.project_root / "skills" / "huggingface-papers"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: huggingface-papers\n"
+            "description: Fetch Hugging Face Daily Papers for a date.\n"
+            "---\n"
+            "# Hugging Face Daily Papers\n",
+            encoding="utf-8",
+        )
+        backend = FakeBackend([PlannerDecision(kind="text", text="ready for daily track", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_project_context",
+            backend=backend,
+        )
+
+        agent.run("开始 daily track")
+
+        memory_block = backend.calls[-1]["memory_block"]
+        self.assertIn("Project-level context:", memory_block)
+        self.assertIn("AGENTS.md", memory_block)
+        self.assertIn("Treat daily track as the full repository workflow", memory_block)
+        self.assertIn("CLAUDE.md", memory_block)
+        self.assertIn("Claude workflow detail from referenced instruction file", memory_block)
+        self.assertIn("MEMORY.md", memory_block)
+        self.assertIn("Track date defaults to previous Beijing day", memory_block)
+        self.assertIn("huggingface-papers (skills/huggingface-papers/SKILL.md)", memory_block)
+        self.assertIn("Fetch Hugging Face Daily Papers", memory_block)
+        self.assertIn("[REDACTED]", memory_block)
+        self.assertNotIn("TEST_API_KEY_VALUE", memory_block)
+        self.assertNotIn("TEST_GITHUB_TOKEN_VALUE", memory_block)
+
+    def test_backend_receives_workflow_todo_ledger(self) -> None:
+        backend = FakeBackend([PlannerDecision(kind="text", text="continue from ledger", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_workflow_todo",
+            backend=backend,
+        )
+        agent.tools.run(
+            "todo",
+            'write [{"id":"collect","content":"Collect source artifacts","status":"completed"},'
+            '{"id":"synth","content":"Synthesize final deliverable","status":"in_progress"},'
+            '{"id":"verify","content":"Run verification","status":"pending"}]',
+        )
+
+        agent.run("继续这个复杂任务")
+
+        memory_block = backend.calls[-1]["memory_block"]
+        self.assertIn("Current workflow todo ledger:", memory_block)
+        self.assertNotIn("Collect source artifacts", memory_block)
+        self.assertIn("[in_progress] synth: Synthesize final deliverable", memory_block)
+        self.assertIn("[pending] verify: Run verification", memory_block)
+        self.assertIn("Use the todo tool to mark completed phases", memory_block)
+
+    def test_backend_receives_artifact_manifest_summary(self) -> None:
+        raw_dir = self.project_root / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "papers.json").write_text('[{"title":"A"},{"title":"B"}]', encoding="utf-8")
+        backend = FakeBackend([PlannerDecision(kind="text", text="continue from artifacts", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_artifact_manifest",
+            backend=backend,
+        )
+        scanned = agent.tools.run("artifact", "scan raw")
+        self.assertIn("recorded total", scanned)
+
+        agent.run("继续完成交付物")
+
+        memory_block = backend.calls[-1]["memory_block"]
+        self.assertIn("Current artifact manifest:", memory_block)
+        self.assertIn("raw/papers.json", memory_block)
+        self.assertIn("Use these artifact paths as durable evidence", memory_block)
+
+    def test_backend_plan_retries_with_compact_context_after_transient_error(self) -> None:
+        (self.project_root / "AGENTS.md").write_text("Project instruction.\n" + ("long context\n" * 2000), encoding="utf-8")
+        (self.project_root / "CLAUDE.md").write_text("Claude instruction.\n" + ("long claude context\n" * 2000), encoding="utf-8")
+        (self.project_root / "MEMORY.md").write_text("Memory instruction.\n" + ("long memory context\n" * 2000), encoding="utf-8")
+        backend = CompactRetryBackend()
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_compact_retry",
+            backend=backend,
+        )
+
+        result = agent.run("continue a workflow")
+
+        self.assertIn("compact retry succeeded", result.final_response)
+        self.assertEqual(len(backend.calls), 2)
+        self.assertIn("compact retry context", backend.calls[1]["message"])
+        self.assertLess(len(backend.calls[1]["memory_block"]), len(backend.calls[0]["memory_block"]))
+        self.assertLessEqual(len(backend.calls[1]["history_text"]), len(backend.calls[0]["history_text"]))
 
     def test_detect_hermes_repo_root_from_env(self) -> None:
         os.environ["SIMPLE_HERMES_HERMES_ROOT"] = "/tmp/hermes-root"
@@ -355,6 +595,272 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("tests passed", result.final_response)
         self.assertIn("The last verification command failed", backend.calls[2]["message"])
         self.assertEqual((self.project_root / "notes.txt").read_text(encoding="utf-8"), "fixed")
+
+    def test_backend_loop_recovers_from_failed_deliverable_validation(self) -> None:
+        raw_dir = self.project_root / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "collected_papers.json").write_text(
+            (
+                "["
+                '{"title":"A","source":"arxiv","reason":"relevant","confidence":"high"},'
+                '{"title":"B","source":"github","reason":"useful","confidence":"medium"}'
+                "]"
+            ),
+            encoding="utf-8",
+        )
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write incomplete json",
+                tool_call=ToolCall(name="write_file", argument='papers.json ::: [{"title":"Only","source":"arxiv"}]'),
+                requires_edit=True,
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate json",
+                tool_call=ToolCall(
+                    name="validate_deliverable",
+                    argument="papers.json min_items=2 required_fields=title,source,reason,confidence",
+                ),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="rewrite from raw artifacts",
+                tool_call=ToolCall(
+                    name="write_file",
+                    argument=(
+                        "papers.json ::: ["
+                        '{"title":"A","source":"arxiv","reason":"relevant","confidence":"high"},'
+                        '{"title":"B","source":"github","reason":"useful","confidence":"medium"}'
+                        "]"
+                    ),
+                ),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate again",
+                tool_call=ToolCall(
+                    name="validate_deliverable",
+                    argument="papers.json min_items=2 required_fields=title,source,reason,confidence",
+                ),
+            ),
+            PlannerDecision(kind="text", text="交付物已重建并通过验证。", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_validation_recovery",
+            backend=backend,
+        )
+
+        result = agent.run("完成 tracking 交付物")
+
+        self.assertIn("交付物已重建", result.final_response)
+        self.assertIn("The deliverable failed structured validation", backend.calls[2]["message"])
+        self.assertIn("raw/collected_papers.json", backend.calls[2]["message"])
+        self.assertTrue(any(step.tool_name == "validate_deliverable" for step in result.trace))
+        self.assertNotIn("repeated the same failing tool call", result.final_response)
+        self.assertIn('"title":"B"', (self.project_root / "papers.json").read_text(encoding="utf-8"))
+
+    def test_backend_loop_blocks_revalidation_without_file_change(self) -> None:
+        (self.project_root / "track.md").write_text("# Track\n\n| a | b |\n| --- | --- |\n| x | - |\n", encoding="utf-8")
+        valid_track = (
+            "# Track\n\n"
+            "## Items\n\n"
+            "This grounded tracking note is intentionally long enough to pass the byte threshold. "
+            "It contains concrete source-backed observations and fully specified table cells.\n"
+        )
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="validate invalid track",
+                tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=120 required_headings=Track"),
+                requires_edit=True,
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate unchanged track again",
+                tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=120 required_headings=Track"),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="try the same validation a third time",
+                tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=120 required_headings=Track"),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="rewrite after no-progress warning",
+                tool_call=ToolCall(name="write_file", argument=f"track.md ::: {valid_track}"),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate repaired track",
+                tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=120 required_headings=Track"),
+            ),
+            PlannerDecision(kind="text", text="track.md repaired and validated.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_validation_no_progress",
+            backend=backend,
+        )
+
+        result = agent.run("repair and validate track.md")
+
+        self.assertIn("repaired and validated", result.final_response)
+        self.assertTrue(any(step.kind == "validation_no_progress_blocked" for step in result.trace))
+        self.assertIn("file content has not changed", backend.calls[3]["message"])
+        validation_results = [
+            step for step in result.trace
+            if step.tool_name == "validate_deliverable" and step.kind == "tool_result"
+        ]
+        self.assertEqual(len(validation_results), 3)
+        self.assertIn("DELIVERABLE_VALIDATION ok", validation_results[-1].content)
+
+    def test_write_file_clears_stale_missing_validation_failure(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="validate missing json",
+                tool_call=ToolCall(
+                    name="validate_deliverable",
+                    argument="papers.json min_items=1 required_fields=title",
+                ),
+                requires_edit=True,
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="create missing json",
+                tool_call=ToolCall(
+                    name="write_file",
+                    argument='papers.json ::: [{"title":"Created"}]',
+                ),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate created json",
+                tool_call=ToolCall(
+                    name="validate_deliverable",
+                    argument="papers.json min_items=1 required_fields=title",
+                ),
+            ),
+            PlannerDecision(kind="text", text="papers.json created and validated.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_stale_validation_failure",
+            backend=backend,
+        )
+
+        result = agent.run("create papers.json and validate it")
+
+        self.assertIn("created and validated", result.final_response)
+        self.assertNotIn("repeated the same failing tool call", result.final_response)
+        self.assertTrue(any(step.tool_name == "validate_deliverable" and step.kind == "tool_result" for step in result.trace))
+
+    def test_artifact_manifest_pushes_agent_to_synthesis_instead_of_more_inspection(self) -> None:
+        raw_dir = self.project_root / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "a.json").write_text('[{"title":"A","source":"x"}]', encoding="utf-8")
+        (raw_dir / "b.json").write_text('[{"title":"B","source":"y"}]', encoding="utf-8")
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="record artifacts",
+                tool_call=ToolCall(name="artifact", argument="scan raw"),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="tool_call", text="read first raw", tool_call=ToolCall(name="read", argument="raw/a.json")),
+            PlannerDecision(kind="tool_call", text="read second raw", tool_call=ToolCall(name="read", argument="raw/b.json")),
+            PlannerDecision(kind="tool_call", text="inspect too much", tool_call=ToolCall(name="tree", argument="raw")),
+            PlannerDecision(
+                kind="tool_call",
+                text="write synthesized report",
+                tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\nA and B synthesized from recorded artifacts."),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate report",
+                tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=20 required_headings=Track"),
+            ),
+            PlannerDecision(kind="text", text="已根据 artifact manifest 合成并验证。", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_artifact_synthesis_guard",
+            backend=backend,
+        )
+
+        with mock.patch("simple_hermes.agent.core.WORKFLOW_ARTIFACT_SYNTHESIS_BUDGET", 2):
+            result = agent.run("根据已有数据完成 tracking 交付物")
+
+        self.assertIn("合成并验证", result.final_response)
+        self.assertTrue(any(step.kind == "artifact_synthesis_blocked" for step in result.trace))
+        self.assertTrue(any("Artifact synthesis block count" in call["message"] for call in backend.calls))
+        self.assertEqual((self.project_root / "track.md").read_text(encoding="utf-8"), "# Track\n\nA and B synthesized from recorded artifacts.")
+
+    def test_auto_tool_output_artifact_enables_synthesis_guard(self) -> None:
+        (self.project_root / "MEMORY.md").write_text("project memory\n", encoding="utf-8")
+        command = f"{shlex.quote(sys.executable)} -c \"print('candidate evidence ' * 30)\""
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="collect source stdout",
+                tool_call=ToolCall(name="terminal", argument=command),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="tool_call", text="inspect memory", tool_call=ToolCall(name="read", argument="MEMORY.md")),
+            PlannerDecision(kind="tool_call", text="inspect too much", tool_call=ToolCall(name="tree", argument=".")),
+            PlannerDecision(kind="tool_call", text="write from artifact", tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\nSynthesized from tool output artifacts.")),
+            PlannerDecision(kind="tool_call", text="validate", tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=20 required_headings=Track")),
+            PlannerDecision(kind="text", text="已从自动 artifact 合成并验证。", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_auto_artifact_guard",
+            backend=backend,
+        )
+
+        with mock.patch("simple_hermes.agent.core.WORKFLOW_ARTIFACT_SYNTHESIS_BUDGET", 1):
+            result = agent.run("采集数据并写交付物")
+
+        self.assertIn("自动 artifact", result.final_response)
+        self.assertTrue(any(step.kind == "artifact_synthesis_blocked" for step in result.trace))
+        self.assertTrue(any("tool_outputs" in call["memory_block"] for call in backend.calls[1:]))
+
+    def test_successful_validation_clears_incomplete_state_after_edit(self) -> None:
+        (self.project_root / "notes.txt").write_text("TODO in unrelated notes\n", encoding="utf-8")
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write track",
+                tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\nComplete grounded summary."),
+                requires_edit=True,
+                requires_test=True,
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="inspect unrelated notes",
+                tool_call=ToolCall(name="terminal", argument="cat notes.txt"),
+            ),
+            PlannerDecision(
+                kind="tool_call",
+                text="validate generated track",
+                tool_call=ToolCall(name="validate_deliverable", argument="track.md min_bytes=10 required_headings=Track"),
+            ),
+            PlannerDecision(kind="text", text="Validated and complete.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_validation_clears",
+            backend=backend,
+        )
+
+        with mock.patch("simple_hermes.agent.core.WORKFLOW_NO_EDIT_STEP_BUDGET", 3):
+            result = agent.run("write and validate track.md")
+
+        self.assertIn("Validated and complete", result.final_response)
+        self.assertTrue(any(step.tool_name == "validate_deliverable" for step in result.trace))
+        self.assertFalse(any(step.kind == "no_edit_budget_blocked" for step in result.trace))
 
     def test_multi_turn_followup_can_use_previous_diagnosis_without_forced_edit(self) -> None:
         core_file = self.project_root / "todo_app" / "core.py"
@@ -532,6 +1038,364 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertTrue(any(step.kind == "repeated_tool_blocked" for step in result.trace))
         self.assertTrue(any("Do not restart project inspection" in call["message"] for call in backend.calls))
 
+    def test_backend_loop_blocks_excessive_inspection_before_required_edit(self) -> None:
+        for index in range(20):
+            (self.project_root / f"notes{index}.txt").write_text(f"value {index}", encoding="utf-8")
+        decisions = [
+            PlannerDecision(kind="tool_call", text=f"read {index}", tool_call=ToolCall(name="read", argument=f"notes{index}.txt"), requires_edit=True)
+            for index in range(14)
+        ]
+        decisions.extend([
+            PlannerDecision(kind="tool_call", text="write summary", tool_call=ToolCall(name="write_file", argument="summary.txt ::: done")),
+            PlannerDecision(kind="text", text="Wrote summary.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_inspection_budget",
+            backend=backend,
+        )
+
+        result = agent.run("complete a repository workflow and write summary")
+
+        self.assertIn("Wrote summary", result.final_response)
+        self.assertTrue((self.project_root / "summary.txt").exists())
+        self.assertTrue(any(step.kind == "inspection_budget_blocked" for step in result.trace))
+        self.assertTrue(any("next step must be productive" in call["message"] for call in backend.calls))
+
+    def test_backend_loop_counts_skills_and_read_only_terminal_as_inspection(self) -> None:
+        skill_dir = self.project_root / "skills" / "daily-source"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: daily-source\n---\n# Daily Source\n", encoding="utf-8")
+        for index in range(11):
+            (self.project_root / f"context{index}.txt").write_text(f"value {index}", encoding="utf-8")
+        decisions = [
+            PlannerDecision(kind="tool_call", text="list skills", tool_call=ToolCall(name="skills", argument="list"), requires_edit=True),
+            PlannerDecision(kind="tool_call", text="view skill", tool_call=ToolCall(name="skills", argument="view daily-source")),
+            PlannerDecision(kind="tool_call", text="cat context", tool_call=ToolCall(name="terminal", argument="cat context0.txt")),
+        ]
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text=f"read {index}", tool_call=ToolCall(name="read", argument=f"context{index}.txt"))
+            for index in range(1, 11)
+        )
+        decisions.extend([
+            PlannerDecision(kind="tool_call", text="write summary", tool_call=ToolCall(name="write_file", argument="summary.txt ::: done")),
+            PlannerDecision(kind="text", text="Wrote summary.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_inspection_budget_skills_terminal",
+            backend=backend,
+        )
+
+        result = agent.run("complete workflow and write summary")
+
+        self.assertIn("Wrote summary", result.final_response)
+        self.assertTrue((self.project_root / "summary.txt").exists())
+        self.assertTrue(any(step.kind == "inspection_budget_blocked" for step in result.trace))
+
+    def test_backend_loop_stops_after_repeated_inspection_budget_blocks(self) -> None:
+        for index in range(20):
+            (self.project_root / f"context{index}.txt").write_text(f"value {index}", encoding="utf-8")
+        decisions = [
+            PlannerDecision(kind="tool_call", text=f"read {index}", tool_call=ToolCall(name="read", argument=f"context{index}.txt"), requires_edit=True)
+            for index in range(13)
+        ]
+        read_only_python = "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('context0.txt').read_text())\nPY"
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text="inspect again", tool_call=ToolCall(name="terminal", argument=read_only_python))
+            for _ in range(6)
+        )
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_inspection_budget_stop",
+            backend=backend,
+        )
+
+        result = agent.run("complete workflow and write summary")
+
+        self.assertIn("Stopped because the backend kept proposing inspection-only tool calls", result.final_response)
+        self.assertGreaterEqual(sum(1 for step in result.trace if step.kind == "inspection_budget_blocked"), 4)
+
+    def test_backend_loop_blocks_long_workflow_without_any_edit(self) -> None:
+        decisions = [
+            PlannerDecision(kind="tool_call", text="check background", tool_call=ToolCall(name="background", argument="list"), requires_edit=(index == 0))
+            for index in range(45)
+        ]
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_no_edit_budget",
+            backend=backend,
+        )
+
+        result = agent.run("complete workflow and write summary")
+
+        self.assertIn("Stopped because the backend kept proposing non-writing tool calls", result.final_response)
+        self.assertGreaterEqual(sum(1 for step in result.trace if step.kind == "no_edit_budget_blocked"), 4)
+
+    def test_backend_loop_blocks_final_text_after_placeholder_write(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write placeholder",
+                tool_call=ToolCall(name="write_file", argument="report.md ::: # Report\n\nTODO: fill later"),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="text", text="Done.", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="complete report",
+                tool_call=ToolCall(name="write_file", argument="report.md ::: # Report\n\nComplete summary from collected evidence."),
+            ),
+            PlannerDecision(kind="text", text="Completed report.md.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_placeholder_write",
+            backend=backend,
+        )
+
+        result = agent.run("complete the report and write report.md")
+
+        self.assertIn("Completed report.md", result.final_response)
+        self.assertEqual((self.project_root / "report.md").read_text(encoding="utf-8"), "# Report\n\nComplete summary from collected evidence.")
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+        self.assertTrue(any("placeholder, TODO, or incomplete" in call["message"] for call in backend.calls))
+
+    def test_backend_loop_blocks_final_text_after_empty_json_write(self) -> None:
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write empty papers",
+                tool_call=ToolCall(name="write_file", argument="papers.json ::: []"),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="text", text="Done.", tool_call=None),
+            PlannerDecision(
+                kind="tool_call",
+                text="write grounded papers",
+                tool_call=ToolCall(name="write_file", argument='papers.json ::: [{"title":"Grounded item","source":"test"}]'),
+            ),
+            PlannerDecision(kind="text", text="Completed papers.json.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_empty_json_write",
+            backend=backend,
+        )
+
+        result = agent.run("complete the daily track and write papers.json")
+
+        self.assertIn("Completed papers.json", result.final_response)
+        self.assertEqual((self.project_root / "papers.json").read_text(encoding="utf-8"), '[{"title":"Grounded item","source":"test"}]')
+        self.assertTrue(any(step.kind == "premature_text_blocked" for step in result.trace))
+        self.assertTrue(agent._tool_call_writes_incomplete_deliverable("write_file", "papers.json ::: []", "Wrote file"))
+
+    def test_placeholder_write_keeps_inspection_budget_active(self) -> None:
+        for index in range(14):
+            (self.project_root / f"raw{index}.json").write_text(f'{{"item": {index}}}', encoding="utf-8")
+        decisions = [
+            PlannerDecision(
+                kind="tool_call",
+                text="write placeholder",
+                tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\n状态：待补全正文"),
+                requires_edit=True,
+            )
+        ]
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text=f"inspect raw {index}", tool_call=ToolCall(name="read", argument=f"raw{index}.json"))
+            for index in range(14)
+        )
+        decisions.extend([
+            PlannerDecision(
+                kind="tool_call",
+                text="write final track",
+                tool_call=ToolCall(name="write_file", argument="track.md ::: # Track\n\nFinal grounded summary."),
+            ),
+            PlannerDecision(kind="text", text="Completed track.md.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_placeholder_budget",
+            backend=backend,
+        )
+
+        result = agent.run("complete the tracking workflow and write track.md")
+
+        self.assertIn("Completed track.md", result.final_response)
+        self.assertEqual((self.project_root / "track.md").read_text(encoding="utf-8"), "# Track\n\nFinal grounded summary.")
+        self.assertTrue(any(step.kind == "inspection_budget_blocked" for step in result.trace))
+
+    def test_backend_loop_blocks_post_edit_inspection_loop(self) -> None:
+        self.project_root.joinpath("report.md").write_text("# Report\n\nComplete summary.", encoding="utf-8")
+        decisions = [
+            PlannerDecision(
+                kind="tool_call",
+                text="write complete report",
+                tool_call=ToolCall(name="write_file", argument="report.md ::: # Report\n\nComplete summary."),
+                requires_edit=True,
+            )
+        ]
+        decisions.extend(
+            PlannerDecision(kind="tool_call", text=f"inspect after edit {index}", tool_call=ToolCall(name="read", argument="report.md"))
+            for index in range(10)
+        )
+        decisions.extend([
+            PlannerDecision(kind="tool_call", text="inspect diff", tool_call=ToolCall(name="diff", argument="")),
+            PlannerDecision(kind="text", text="Report is complete.", tool_call=None),
+        ])
+        backend = FakeBackend(decisions)
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_post_edit_inspection",
+            backend=backend,
+        )
+
+        result = agent.run("complete the report")
+
+        self.assertIn("Report is complete", result.final_response)
+        self.assertTrue(any(step.kind == "post_edit_inspection_blocked" for step in result.trace))
+        self.assertTrue(any("after an edit" in call["message"] for call in backend.calls))
+
+    def test_terminal_python_read_text_counts_as_inspection_but_subprocess_does_not(self) -> None:
+        read_only = "python3 - <<'PY'\nfrom pathlib import Path\nprint(Path('README.md').read_text())\nPY"
+        productive = "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', 'script.py'])\nPY"
+
+        self.assertTrue(self.agent._terminal_is_read_only_inspection(read_only))
+        self.assertFalse(self.agent._terminal_is_read_only_inspection(productive))
+        self.assertTrue(self.agent._terminal_command_has_write_hint("python3 script.py --output result.json"))
+        self.assertTrue(self.agent._mentions_incomplete_deliverable("TODO: fill later"))
+        self.assertTrue(self.agent._mentions_incomplete_deliverable("状态：待补全正文"))
+        self.assertTrue(self.agent._looks_like_empty_deliverable_content("[]"))
+        self.assertTrue(self.agent._looks_like_empty_deliverable_content("# Track"))
+        cleanup_script = "python3 - <<'PY'\nfrom pathlib import Path\ntext = 'old TODO'\nif 'TODO' in text:\n    Path('track.md').write_text('Complete grounded draft')\nPY"
+        self.assertFalse(self.agent._tool_call_writes_incomplete_deliverable("terminal", cleanup_script, "exit code: 0"))
+        self.assertTrue(self.agent._tool_call_writes_incomplete_deliverable("terminal", "python3 script.py --output report.md", "exit code: 0\nstdout: TODO remains"))
+        self.assertFalse(self.agent._mentions_incomplete_deliverable("状态：初稿"))
+        self.assertFalse(self.agent._looks_like_empty_deliverable_content("[{\"title\":\"x\"}]"))
+        self.assertFalse(self.agent._mentions_incomplete_deliverable("todo_app/core.py"))
+
+    def test_normalizes_compound_tool_names_from_backend(self) -> None:
+        call = self.agent._normalize_tool_call(ToolCall(name="background wait", argument="bg1 20"))
+        self.assertEqual(call.name, "background")
+        self.assertEqual(call.argument, "wait bg1 20")
+        todo_call = self.agent._normalize_tool_call(ToolCall(name="todo update", argument="read completed"))
+        self.assertEqual(todo_call.name, "todo")
+        self.assertEqual(todo_call.argument, "update read completed")
+
+    def test_background_wait_loop_helpers_detect_running_tasks(self) -> None:
+        self.assertEqual(self.agent._background_task_id_from_argument("wait bg3 120"), "bg3")
+        self.assertEqual(self.agent._background_task_id_from_argument("status bg7"), "bg7")
+        self.assertIsNone(self.agent._background_task_id_from_argument("tail bg3"))
+        self.assertEqual(self.agent._background_wait_task_id_from_argument("wait bg3 120"), "bg3")
+        self.assertIsNone(self.agent._background_wait_task_id_from_argument("status bg7"))
+        self.assertEqual(
+            self.agent._background_running_task_id_from_result("Background task bg3 is still running after 120.0s."),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_running_task_id_from_result("bg3: running, 252.3s\n$ command"),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_running_task_id_from_result("bg3 tail (running):\npartial output"),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_finished_task_id_from_result("Background task bg3 completed with exit code 0.\n$ command"),
+            "bg3",
+        )
+        self.assertEqual(
+            self.agent._background_finished_task_id_from_result("Stopped background task bg3 with exit code -15."),
+            "bg3",
+        )
+        self.assertTrue(
+            self.agent._background_task_known_finished(
+                "bg3",
+                ["- background('stop bg3') -> Background task bg3 is already complete."],
+            )
+        )
+        self.assertFalse(
+            self.agent._background_task_known_finished(
+                "bg3",
+                ["- background('wait bg3 20') -> Background task bg3 is still running after 20.0s."],
+            )
+        )
+
+    def test_background_completion_event_is_injected_into_next_planner_call(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'print(\"auto complete event\")'"
+        backend = FakeBackend([PlannerDecision(kind="text", text="Used background completion event.", tool_call=None)])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_background_event",
+            backend=backend,
+        )
+        start = agent.tools.run("background", f"start {command}")
+        self.assertIn("Started background task bg1", start)
+        waited = agent.tool_impl._background_wait("bg1 5")
+        self.assertIn("auto complete event", waited)
+
+        result = agent.run("continue from background result")
+
+        self.assertIn("Used background completion event", result.final_response)
+        self.assertTrue(any(step.kind == "background_event" for step in result.trace))
+        self.assertIn("Background process events were delivered by the runtime", backend.calls[0]["message"])
+        self.assertIn("auto complete event", backend.calls[0]["message"])
+
+    def test_backend_loop_blocks_wait_after_tail_status_cycle(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'import time; print(\"partial\", flush=True); time.sleep(5)'"
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="start slow job", tool_call=ToolCall(name="background", argument=f"start {command}")),
+            PlannerDecision(kind="tool_call", text="wait slow job", tool_call=ToolCall(name="background", argument="wait bg1 0.1")),
+            PlannerDecision(kind="tool_call", text="tail slow job", tool_call=ToolCall(name="background", argument="tail bg1")),
+            PlannerDecision(kind="tool_call", text="status slow job", tool_call=ToolCall(name="background", argument="status bg1")),
+            PlannerDecision(kind="tool_call", text="wait again", tool_call=ToolCall(name="background", argument="wait bg1 0.1")),
+            PlannerDecision(kind="tool_call", text="stop slow job", tool_call=ToolCall(name="background", argument="stop bg1")),
+            PlannerDecision(kind="text", text="Stopped the stuck background task and continued.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_background_wait_loop",
+            backend=backend,
+        )
+
+        result = agent.run("run a workflow with a slow background source")
+
+        self.assertIn("Stopped the stuck", result.final_response)
+        self.assertTrue(any(step.kind == "background_wait_loop_blocked" for step in result.trace))
+        self.assertTrue(any("Do not wait again" in call["message"] for call in backend.calls))
+
+    def test_backend_loop_recovers_from_chained_background_refusal(self) -> None:
+        first = f"{shlex.quote(sys.executable)} -c 'print(\"one\")'"
+        second = f"{shlex.quote(sys.executable)} -c 'print(\"two\")'"
+        backend = FakeBackend([
+            PlannerDecision(
+                kind="tool_call",
+                text="start bad chain",
+                tool_call=ToolCall(name="background", argument=f"start {first} && {second}"),
+                requires_edit=True,
+            ),
+            PlannerDecision(kind="tool_call", text="start first separately", tool_call=ToolCall(name="background", argument=f"start {first}")),
+            PlannerDecision(kind="tool_call", text="start second separately", tool_call=ToolCall(name="background", argument=f"start {second}")),
+            PlannerDecision(kind="tool_call", text="write result", tool_call=ToolCall(name="write_file", argument="summary.txt ::: collected separately")),
+            PlannerDecision(kind="text", text="Split background tasks and wrote summary.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_background_chain_refusal",
+            backend=backend,
+        )
+
+        result = agent.run("collect independent sources and write a summary")
+
+        self.assertIn("Split background tasks", result.final_response)
+        self.assertTrue(any(step.tool_name == "background" and "Refusing chained background command" in step.content for step in result.trace))
+        self.assertTrue(any("The background tool rejected a chained shell command" in call["message"] for call in backend.calls))
+
     def test_backend_followup_carries_run_state_across_tool_calls(self) -> None:
         target = self.project_root / "notes.txt"
         target.write_text("old value", encoding="utf-8")
@@ -553,6 +1417,35 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("- project_overview('') ->", last_message)
         self.assertIn("- read('notes.txt') ->", last_message)
         self.assertIn("- patch_file('notes.txt ::: old ::: new') -> Patched file notes.txt.", last_message)
+
+    def test_backend_followup_shortens_large_tool_result_for_planner(self) -> None:
+        large_output = "HEAD\n" + ("x" * 5000) + "\nTAIL"
+        backend = FakeBackend([
+            PlannerDecision(kind="tool_call", text="run noisy command", tool_call=ToolCall(name="terminal", argument="python3 -c noisy")),
+            PlannerDecision(kind="text", text="Recovered from noisy command.", tool_call=None),
+        ])
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_large_tool_result",
+            backend=backend,
+        )
+
+        original_run = agent.tools.run
+
+        def fake_run(name: str, argument: str) -> str:
+            if name == "terminal":
+                return large_output
+            return original_run(name, argument)
+
+        agent.tools.run = fake_run
+        result = agent.run("run noisy command then summarize")
+
+        self.assertIn("Recovered from noisy command", result.final_response)
+        followup = backend.calls[-1]["message"]
+        self.assertIn("tool result shortened for planner", followup)
+        self.assertIn("HEAD", followup)
+        self.assertIn("TAIL", followup)
+        self.assertLess(len(followup), len(large_output) + 1000)
 
     def test_backend_loop_blocks_premature_text_before_code_edit(self) -> None:
         target = self.project_root / "notes.txt"
@@ -870,6 +1763,21 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("Agent test file", result.final_response)
         self.assertIn("Backend planning failed after the tool result", result.final_response)
         self.assertEqual(result.trace[-1].kind, "backend_error_fallback")
+
+    def test_backend_error_after_tool_retries_before_fallback(self) -> None:
+        backend = RecoverAfterToolErrorBackend()
+        agent = self._make_agent(
+            project_root=self.project_root,
+            base_dir=Path(self.temp_dir.name) / "state_backend_error_retry_after_tool",
+            backend=backend,
+        )
+
+        result = agent.run("inspect README.md")
+
+        self.assertIn("continued after backend retry", result.final_response)
+        self.assertTrue(any(step.kind == "backend_error_retry" for step in result.trace))
+        self.assertIn("strict JSON", backend.calls[2]["message"])
+        self.assertIn("The previous tool was read", backend.calls[2]["message"])
 
     def test_delegate_creates_child_session_and_returns_summary(self) -> None:
         result = self.agent.run("delegate read README.md")

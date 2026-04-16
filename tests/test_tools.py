@@ -1,4 +1,5 @@
 import os
+import json
 import shlex
 import subprocess
 import sys
@@ -55,6 +56,15 @@ class ToolTests(unittest.TestCase):
         self.assertIn("diff", text)
         self.assertIn("checkpoint", text)
         self.assertIn("rollback", text)
+        self.assertIn("skills", text)
+        self.assertIn("cron", text)
+        self.assertIn("mcp", text)
+        self.assertIn("todo", text)
+        self.assertIn("artifact", text)
+        self.assertIn("experience", text)
+        self.assertIn("validate_deliverable", text)
+        self.assertIn("fetch_url", text)
+        self.assertIn("credential_audit", text)
         self.assertIn("path ::: exact target", text)
 
     def test_read_file(self) -> None:
@@ -129,6 +139,32 @@ class ToolTests(unittest.TestCase):
         listed = self.tools.user_memories("")
         self.assertIn("user likes concise replies", listed)
 
+    def test_todo_write_update_and_session_state(self) -> None:
+        text = self.tools.todo(
+            'write [{"id":"read","content":"Read project instructions","status":"in_progress"},'
+            '{"id":"write","content":"Write the deliverable","status":"pending"}]'
+        )
+        self.assertIn('"total": 2', text)
+        self.assertIn('"in_progress": 1', text)
+
+        self.tools.todo("update read completed")
+        updated = self.tools.todo("update write in_progress")
+        self.assertIn('"completed": 1', updated)
+        self.assertIn('"in_progress": 1', updated)
+        self.assertIn("Write the deliverable", updated)
+
+        persisted = BuiltInTools(self.memory, self.sessions, self.project_root)
+        listed = persisted.todo("list")
+        self.assertIn("Read project instructions", listed)
+        self.assertIn("Write the deliverable", listed)
+        self.assertIn("in_progress", listed)
+
+        rejected = self.tools.todo(
+            'write [{"id":"a","content":"A","status":"in_progress"},'
+            '{"id":"b","content":"B","status":"in_progress"}]'
+        )
+        self.assertIn("Only one todo item may be in_progress", rejected)
+
     def test_restricted_tool_registry_blocks_disallowed_tools(self) -> None:
         limited_tools = BuiltInTools(self.memory, self.sessions, self.project_root, allowed_tools={"help", "summarize"})
         text = limited_tools.registry.run("read", "README.md")
@@ -181,6 +217,26 @@ class ToolTests(unittest.TestCase):
         self.assertIn("npm test", text)
         self.assertIn("Package scripts:", text)
         self.assertIn("- test: node --test", text)
+
+    def test_project_overview_reports_instruction_files_and_local_skills(self) -> None:
+        (self.project_root / "AGENTS.md").write_text("Follow project workflow.", encoding="utf-8")
+        skill_dir = self.project_root / "skills" / "rss-reader"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: rss-reader\n"
+            "description: Fetch RSS feeds for tracking.\n"
+            "---\n"
+            "# RSS Reader\n",
+            encoding="utf-8",
+        )
+
+        text = self.tools.project_overview("")
+
+        self.assertIn("Project instruction files:", text)
+        self.assertIn("- AGENTS.md", text)
+        self.assertIn("Project-local skills:", text)
+        self.assertIn("- rss-reader (skills/rss-reader/SKILL.md): Fetch RSS feeds for tracking.", text)
 
     def test_diff_shows_git_diff_when_project_is_git_repo(self) -> None:
         subprocess_env = os.environ.copy()
@@ -305,6 +361,22 @@ class ToolTests(unittest.TestCase):
         self.assertIn("...[truncated]...", text)
         self.assertLess(len(text), 3200)
 
+    def test_terminal_allows_shell_redirection_by_default(self) -> None:
+        text = self.tools.terminal("printf redirected > redirected.txt")
+
+        self.assertIn("exit code: 0", text)
+        self.assertEqual((self.project_root / "redirected.txt").read_text(encoding="utf-8"), "redirected")
+
+    def test_terminal_refuses_shell_redirection_when_dangerous_terminal_disabled(self) -> None:
+        os.environ["SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL"] = "0"
+        try:
+            guarded = BuiltInTools(self.memory, self.sessions, self.project_root)
+            text = guarded.terminal("printf redirected > redirected.txt")
+            self.assertIn("Refusing terminal command with shell redirection", text)
+            self.assertFalse((self.project_root / "redirected.txt").exists())
+        finally:
+            os.environ.pop("SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL", None)
+
     def test_background_task_can_start_wait_and_record_completion(self) -> None:
         command = f"{shlex.quote(sys.executable)} -c 'print(\"background done\")'"
         start = self.tools.background(f"start {command}")
@@ -319,6 +391,22 @@ class ToolTests(unittest.TestCase):
         history = self.sessions.history(limit=10)
         self.assertTrue(any(row.get("kind") == "background_result" for row in history))
 
+    def test_background_wait_running_task_suggests_tail_stop_or_proceed(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'import time; print(\"partial\", flush=True); time.sleep(2)'"
+        start = self.tools.background(f"start {command}")
+        self.assertIn("Started background task bg1", start)
+
+        waited = self.tools.background("wait bg1 0.1")
+        tailed = self.tools.background("tail bg1")
+
+        self.assertIn("still running", waited)
+        self.assertIn("background tail", waited)
+        self.assertIn("background stop", waited)
+        self.assertIn("partial", waited)
+        self.assertIn("bg1 tail (running):", tailed)
+        self.assertIn("partial", tailed)
+        self.tools.background("stop bg1")
+
     def test_background_task_refuses_dangerous_terminal_commands(self) -> None:
         os.environ["SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL"] = "0"
         try:
@@ -328,6 +416,33 @@ class ToolTests(unittest.TestCase):
             self.assertTrue((self.project_root / "README.md").exists())
         finally:
             os.environ.pop("SIMPLE_HERMES_ALLOW_DANGEROUS_TERMINAL", None)
+
+    def test_background_start_refuses_chained_shell_commands(self) -> None:
+        first = f"{shlex.quote(sys.executable)} -c 'print(\"one\")'"
+        second = f"{shlex.quote(sys.executable)} -c 'print(\"two\")'"
+
+        text = self.tools.background(f"start {first} && {second}")
+
+        self.assertIn("Refusing chained background command", text)
+        self.assertIn("separate background tasks", text)
+        self.assertIn("write a project-local script", text)
+
+    def test_background_chain_detection_allows_language_internal_semicolon(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c 'print(\"one\"); print(\"two\")'"
+
+        start = self.tools.background(f"start {command}")
+        waited = self.tools.background("wait bg1 5")
+
+        self.assertIn("Started background task bg1", start)
+        self.assertIn("completed with exit code 0", waited)
+        self.assertIn("one", waited)
+        self.assertIn("two", waited)
+
+    def test_background_start_refuses_shell_wrapper_chains(self) -> None:
+        text = self.tools.background("start bash -lc 'echo one && echo two'")
+
+        self.assertIn("Refusing chained background command", text)
+        self.assertIn("&&", text)
 
     def test_write_file_writes_project_relative_file(self) -> None:
         text = self.tools.write_file("notes/todo.txt first task")
@@ -484,6 +599,327 @@ class ToolTests(unittest.TestCase):
         tools = BuiltInTools(self.memory, self.sessions, self.project_root, backend=FakeRecallBackend())
         text = tools.recall("sqlite")
         self.assertIn("MODEL RECALL SUMMARY", text)
+
+    def test_recall_all_searches_across_sessions(self) -> None:
+        child_id = self.sessions.create_child_session("default", title="child")
+        self.sessions.append("user", "cross session marker", session_id=child_id)
+
+        text = self.tools.recall_all("marker")
+
+        self.assertIn("Cross-session recall summary", text)
+        self.assertIn(child_id, text)
+        self.assertIn("cross session marker", text)
+
+    def test_skills_create_view_and_use_local_markdown(self) -> None:
+        self.tools.skills_dir = Path(self.temp_dir.name) / "skills"
+
+        created = self.tools.skills("create code-review ::: prefer concise findings")
+        listed = self.tools.skills("list")
+        viewed = self.tools.skills("view code-review")
+        used = self.tools.skills("use code-review")
+
+        self.assertIn("Created skill code-review", created)
+        self.assertIn("code-review", listed)
+        self.assertIn("prefer concise findings", viewed)
+        self.assertIn("Loaded skill into session context", used)
+        history = self.sessions.history(session_id="default", limit=10)
+        self.assertTrue(any(row.get("kind") == "skill_context" for row in history))
+
+    def test_experience_record_list_view_and_summarize(self) -> None:
+        recorded = self.tools.experience(
+            "record status=failed failure_type=test_failure goal='fix tests' ::: AssertionError on discount"
+        )
+        card_id = recorded.split()[2].rstrip(":")
+
+        listed = self.tools.experience("list")
+        viewed = self.tools.experience(f"view {card_id}")
+        summary = self.tools.experience("summarize")
+
+        self.assertIn("Recorded experience", recorded)
+        self.assertIn(card_id, listed)
+        self.assertIn("AssertionError on discount", viewed)
+        self.assertIn('"test_failure": 1', summary)
+        self.assertTrue((self.project_root / ".simple_hermes" / "evolution").exists())
+
+    def test_skills_candidate_propose_view_and_promote(self) -> None:
+        self.tools.skills_dir = Path(self.temp_dir.name) / "skills"
+        self.tools.skill_candidates_dir = Path(self.temp_dir.name) / "skill_candidates"
+
+        proposed = self.tools.skills(
+            "propose code-review from=exp-1 reason='captured failure' ::: "
+            "# code-review\n\nCheck tests first and cite failing output."
+        )
+        candidate_id = proposed.split()[3].rstrip(":")
+        listed = self.tools.skills("candidates")
+        viewed = self.tools.skills(f"view-candidate {candidate_id}")
+        promoted = self.tools.skills(f"promote {candidate_id}")
+        stable = self.tools.skills("view code-review")
+
+        self.assertIn("Created skill candidate", proposed)
+        self.assertIn(candidate_id, listed)
+        self.assertIn("captured failure", viewed)
+        self.assertIn("Promoted skill candidate", promoted)
+        self.assertIn("Check tests first", stable)
+
+    def test_skills_promote_refuses_placeholder_candidate(self) -> None:
+        self.tools.skills_dir = Path(self.temp_dir.name) / "skills"
+        self.tools.skill_candidates_dir = Path(self.temp_dir.name) / "skill_candidates"
+
+        proposed = self.tools.skills("propose draft-skill ::: # draft-skill\n\nTODO: fill details later.")
+        candidate_id = proposed.split()[3].rstrip(":")
+        promoted = self.tools.skills(f"promote {candidate_id}")
+
+        self.assertIn("Refusing to promote candidate", promoted)
+        self.assertFalse((self.tools.skills_dir / "draft-skill.md").exists())
+
+    def test_skills_list_view_and_use_project_local_skill(self) -> None:
+        skill_dir = self.project_root / "skills" / "huggingface-papers"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: huggingface-papers\n"
+            "description: Fetch HuggingFace Daily Papers.\n"
+            "---\n"
+            "# HuggingFace Papers\n",
+            encoding="utf-8",
+        )
+
+        listed = self.tools.skills("list")
+        viewed = self.tools.skills("view huggingface-papers")
+        used = self.tools.skills("use huggingface-papers")
+
+        self.assertIn("Project-local skills", listed)
+        self.assertIn("- huggingface-papers", listed)
+        self.assertIn("skill:huggingface-papers (project)", viewed)
+        self.assertIn("Fetch HuggingFace Daily Papers", viewed)
+        self.assertIn("Loaded skill into session context (project)", used)
+        history = self.sessions.history(session_id="default", limit=10)
+        self.assertTrue(any("source=project" in row.get("content", "") for row in history))
+
+    def test_cron_add_run_due_and_delete(self) -> None:
+        self.tools.cron_path = Path(self.temp_dir.name) / "cron.json"
+
+        added = self.tools.cron("add smoke every 1 ::: tool:remember scheduled fact")
+        jobs = self.tools._load_cron_jobs()
+        jobs[0]["next_run_at"] = 0
+        self.tools._save_cron_jobs(jobs)
+        due = self.tools.cron("run-due")
+        listed = self.tools.cron("list")
+        deleted = self.tools.cron(f"delete {jobs[0]['id']}")
+
+        self.assertIn("Added cron job", added)
+        self.assertIn("Ran due cron jobs", due)
+        self.assertIn("Saved memory", due)
+        self.assertIn("smoke", listed)
+        self.assertIn("Deleted cron job", deleted)
+
+    def test_mcp_exports_sessions_and_redacts_secret_values(self) -> None:
+        self.sessions.append("user", "api_key = TEST_API_KEY_VALUE")
+
+        resources = self.tools.mcp("resources")
+        session_json = self.tools.mcp("session default")
+        search_json = self.tools.mcp("search api_key")
+
+        self.assertIn("simple-hermes://sessions", resources)
+        self.assertIn("[REDACTED]", session_json)
+        self.assertNotIn("TEST_API_KEY_VALUE", session_json)
+        self.assertIn("[REDACTED]", search_json)
+
+    def test_artifact_scan_records_workflow_outputs(self) -> None:
+        raw_dir = self.project_root / "raw"
+        output_dir = self.project_root / "outputs"
+        raw_dir.mkdir()
+        output_dir.mkdir()
+        (raw_dir / "papers.json").write_text(
+            json.dumps([{"title": "A"}, {"title": "B"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (output_dir / "track.md").write_text("# Daily Track\n\ncontent\n", encoding="utf-8")
+
+        scanned = self.tools.artifact("scan .")
+        listed = self.tools.artifact("list")
+
+        self.assertIn("Scanned artifacts under .", scanned)
+        self.assertIn("raw/papers.json", scanned)
+        self.assertIn("items=2", scanned)
+        self.assertIn("outputs/track.md", listed)
+        self.assertIn("Artifacts: 2", listed)
+        self.assertTrue((self.project_root / ".simple_hermes" / "artifacts").exists())
+
+    def test_terminal_success_output_is_saved_as_artifact(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c \"print('artifact evidence ' * 30)\""
+        result = self.tools.terminal(command)
+        listed = self.tools.artifact("list")
+
+        self.assertIn("exit code: 0", result)
+        self.assertIn("artifact:", result)
+        self.assertIn("tool_outputs", listed)
+        self.assertIn("source_tool", self.sessions.get_state("default", "artifact_manifest") or "")
+
+    def test_validate_failure_lists_manifest_tool_outputs_as_rebuild_candidates(self) -> None:
+        command = f"{shlex.quote(sys.executable)} -c \"print('[{{\\\"title\\\": \\\"A\\\"}}, {{\\\"title\\\": \\\"B\\\"}}]' * 20)\""
+        terminal_result = self.tools.terminal(command)
+        (self.project_root / "papers.json").write_text(
+            json.dumps([{"title": "Only one"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        failed = self.tools.validate_deliverable("papers.json min_items=2 required_fields=title")
+
+        self.assertIn("artifact:", terminal_result)
+        self.assertIn("DELIVERABLE_VALIDATION failed", failed)
+        self.assertIn("Candidate artifacts:", failed)
+        self.assertIn(".simple_hermes/artifacts", failed)
+        self.assertIn("tool_outputs", failed)
+
+    def test_todo_accepts_redundant_tool_prefix_in_argument(self) -> None:
+        self.tools.todo('write [{"id":"collect","content":"Collect data","status":"in_progress"}]')
+
+        result = self.tools.todo("todo update collect completed")
+
+        self.assertIn('"status": "completed"', result)
+
+    def test_validate_json_deliverable_reports_schema_gaps_and_raw_candidates(self) -> None:
+        raw_dir = self.project_root / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "collected_papers.json").write_text(
+            json.dumps(
+                [
+                    {"title": "Paper A", "source": "arxiv", "reason": "relevant", "confidence": "high"},
+                    {"title": "Paper B", "source": "github", "reason": "useful", "confidence": "medium"},
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (self.project_root / "papers.json").write_text(
+            json.dumps([{"title": "Only one", "source": "arxiv"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        failed = self.tools.validate_deliverable(
+            "papers.json min_items=2 required_fields=title,source,reason,confidence"
+        )
+
+        self.assertIn("DELIVERABLE_VALIDATION failed", failed)
+        self.assertIn("item count 1 < min_items 2", failed)
+        self.assertIn("field 'reason' missing/empty", failed)
+        self.assertIn("Recommended recovery: rebuild this deliverable from raw/artifact files", failed)
+        self.assertIn("raw/collected_papers.json", failed)
+
+        (self.project_root / "papers.json").write_text(
+            json.dumps(
+                [
+                    {"title": "Paper A", "source": "arxiv", "reason": "relevant", "confidence": "high"},
+                    {"title": "Paper B", "source": "github", "reason": "useful", "confidence": "medium"},
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        ok = self.tools.validate_deliverable(
+            "papers.json min_items=2 required_fields=title,source,reason,confidence"
+        )
+        self.assertIn("DELIVERABLE_VALIDATION ok", ok)
+
+    def test_validate_markdown_deliverable_flags_placeholders_and_empty_cells(self) -> None:
+        (self.project_root / "track.md").write_text(
+            "# Daily Track\n\n"
+            "## GitHub\n\n"
+            "| name | url | note |\n"
+            "| --- | --- | --- |\n"
+            "| project | N/A | 待补 |\n",
+            encoding="utf-8",
+        )
+
+        text = self.tools.validate_deliverable(
+            "track.md min_bytes=100 required_headings=Daily,GitHub"
+        )
+
+        self.assertIn("DELIVERABLE_VALIDATION failed", text)
+        self.assertIn("placeholder/incomplete markers found", text)
+        self.assertIn("possible empty/N/A markdown table cells", text)
+        self.assertIn("placeholder_deliverable", self.tools.experience("summarize"))
+
+    def test_run_tests_failure_records_experience(self) -> None:
+        (self.project_root / "tests" / "test_sample.py").write_text(
+            "import unittest\n\n\nclass SampleTest(unittest.TestCase):\n    def test_fail(self):\n        self.assertTrue(False)\n",
+            encoding="utf-8",
+        )
+
+        text = self.tools.run_tests("")
+        summary = self.tools.experience("summarize")
+
+        self.assertIn("exit code: 1", text)
+        self.assertIn('"test_failure": 1', summary)
+
+    def test_validate_markdown_deliverable_flags_tracking_placeholders(self) -> None:
+        (self.project_root / "track.md").write_text(
+            "# Daily Track\n\n"
+            "## ArXiv\n\n"
+            "| paper | arxiv |\n"
+            "| --- | --- |\n"
+            "| Candidate | [2604.xxxxx](https://arxiv.org/) |\n\n"
+            "GitHub stars 更新待刷新，papers.json 需在后续步骤补全。\n",
+            encoding="utf-8",
+        )
+
+        text = self.tools.validate_deliverable("track.md min_bytes=80 required_headings=Daily,ArXiv")
+
+        self.assertIn("DELIVERABLE_VALIDATION failed", text)
+        self.assertIn("placeholder/incomplete markers found", text)
+        self.assertIn("待刷新", text)
+        self.assertIn("补全", text)
+        self.assertIn("placeholder/incomplete patterns found", text)
+        self.assertIn("placeholder arXiv id", text)
+        self.assertIn("empty arXiv link", text)
+
+    def test_validate_json_deliverable_flags_placeholder_strings(self) -> None:
+        (self.project_root / "papers.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "title": "Candidate",
+                        "source": "arxiv",
+                        "reason": "待刷新",
+                        "confidence": "medium",
+                        "arxiv_id": "2604.xxxxx",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        text = self.tools.validate_deliverable(
+            "papers.json min_items=1 required_fields=title,source,reason,confidence,arxiv_id"
+        )
+
+        self.assertIn("DELIVERABLE_VALIDATION failed", text)
+        self.assertIn("placeholder/incomplete markers found in JSON strings", text)
+        self.assertIn("placeholder/incomplete patterns found in JSON strings", text)
+        self.assertIn("placeholder arXiv id", text)
+
+    def test_dependency_scan_and_credential_audit_do_not_read_secret_values(self) -> None:
+        (self.project_root / "package.json").write_text(
+            '{"dependencies": {"left-pad": "1.3.0"}, "devDependencies": {"eslint": "9.0.0"}}',
+            encoding="utf-8",
+        )
+        (self.project_root / ".env.local").write_text("API_KEY=TEST_API_KEY_VALUE", encoding="utf-8")
+
+        deps = self.tools.dependency_scan("")
+        audit = self.tools.credential_audit("")
+
+        self.assertIn("left-pad", deps)
+        self.assertIn(".env.local", audit)
+        self.assertIn("contents not read", audit)
+        self.assertNotIn("TEST_API_KEY_VALUE", audit)
+
+    def test_fetch_url_rejects_non_http_urls_without_reading_local_files(self) -> None:
+        text = self.tools.fetch_url(str(self.project_root / ".env"))
+
+        self.assertIn("only supports public http(s) URLs", text)
+        self.assertNotIn("SECRET=***", text)
 
     def test_lineage_tool_shows_current_session_chain(self) -> None:
         child_id = self.sessions.create_child_session("default", title="child task")
