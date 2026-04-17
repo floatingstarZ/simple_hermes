@@ -1,10 +1,10 @@
 # Simple Hermes 自进化能力映射
 
-更新时间：2026-04-16
+更新时间：2026-04-17
 
 ## 当前已有功能
 
-Simple Hermes 已经具备自进化系统的底座，并加入了一个最小本地闭环：失败信号会保存成 experience card，experience card 可以沉淀为候选 skill，候选 skill 需要显式 promote 才能进入稳定 skill。
+Simple Hermes 已经具备自进化系统的底座，并加入了一个最小本地闭环：失败信号会保存成 experience card，`self_evolve` 可从同类经验中归纳候选 skill，候选 skill 通过结构/测试验证后仍需显式 promote 才能进入稳定 skill。
 
 | 能力块 | 当前实现 | 文件/工具 | 自进化意义 |
 | --- | --- | --- | --- |
@@ -14,9 +14,11 @@ Simple Hermes 已经具备自进化系统的底座，并加入了一个最小本
 | 任务 ledger | session-scoped todo list | `todo` | 复杂任务状态可恢复 |
 | skill 雏形 | Markdown skill create/view/use/list/delete/propose/promote | `skills` | procedural memory 的本地载体，候选区和稳定区隔离 |
 | experience card | 项目内 JSONL 经验池 | `experience`, `.simple_hermes/evolution/` | 保存失败类型、证据、lesson 和 artifact 引用 |
+| self-evolution runner | status/propose/validate/run | `self_evolve` | 从经验池生成候选 skill，并记录验证结果 |
 | artifact manifest | 扫描 raw/artifacts/output/logs | `artifact` | 将工具输出变成可引用证据 |
 | deliverable validation | Markdown/JSON 结构校验和恢复建议 | `validate_deliverable` | 给自我修复提供明确失败信号 |
 | code benchmark | fixture + runner + HTML report | `benchmarks/`, `scripts/run_code_agent_benchmark.py` | 可以做演化前后对比 |
+| 离线试验 | 隔离 workspace + demo tests + summary JSON | `scripts/run_self_evolution_experiment.py` | 无需 API key 验证经验卡到候选 skill 的闭环 |
 | 后台任务 | start/list/status/tail/wait/stop | `background` | 支持长时间采集和实验 |
 | delegation | child sessions / parallel delegation | `delegate`, `parallel_delegate` | 可将探索、验证、综合分工 |
 
@@ -27,9 +29,9 @@ Simple Hermes 已经具备自进化系统的底座，并加入了一个最小本
 | 自动任务生成 | self-questioning / task manager | 只有手写 benchmark | 缺少从历史失败生成测试任务 |
 | 经验池 | experience manager / vector store / shared storage | project-local JSONL experience cards | 还缺少跨项目检索和相似失败聚合 |
 | 失败归因 | self-attributing / Failure Analyzer | 有 test output 和 validation failure | 缺少失败类型分类和责任定位 |
-| skill induction | trajectory -> skill KB | `skills propose` 候选区 | 还缺少从 trace 自动生成候选文本 |
+| skill induction | trajectory -> skill KB | `self_evolve propose/run` 可从 experience card 生成候选文本 | 还缺少 LLM/trace 级归因和跨项目聚合 |
 | skill refinement | execution feedback -> skill rewrite | 手动 patch | 缺少 outcome log 和 patch proposal |
-| skill promotion | validated publish mode | 候选区 + placeholder gate + 显式 promote | 还缺少 benchmark gate 和 rollback |
+| skill promotion | validated publish mode | 候选区 + quality gate + `self_evolve validate` + 显式 promote | 还缺少 benchmark gate 和 rollback |
 | 长期评测 | sequential stream, token/step trend | 单次 benchmark 为主 | 缺少跨轮次 evolution metrics |
 | 安全治理 | contracts / verified fallback / memory isolation | credential audit + path protection | 缺少 memory/skill 写入审计 |
 
@@ -42,8 +44,8 @@ benchmark/task run
   -> trace + test/log/artifact
   -> failure card
   -> skill candidate or skill patch proposal
-  -> validation task
-  -> promote to stable skill if passed
+  -> self_evolve validate
+  -> explicit promote to stable skill if passed
 ```
 
 这个闭环对应 SkillForge/SkillClaw 的最小本地版本，不需要 RL，不需要远程 shared storage，也不需要向量数据库。
@@ -182,6 +184,8 @@ benchmark/task run
 3. `run_tests` 失败自动记录 `test_failure` 或 `zero_tests`。
 4. 增加 `skills propose/list-candidates/view-candidate/promote`。
 5. promotion 前检查 TODO、占位符、空 arXiv 链接等明显未完成内容。
+6. 增加 `self_evolve status/propose/validate/run`，把同类 experience card 归纳为候选 skill，并把验证结果写回 candidate metadata。
+7. 增加 `scripts/run_self_evolution_experiment.py`，在隔离 workspace 中自动写入经验卡、生成候选 skill、运行 unittest 验证门并输出 `summary.json`。
 
 ## 推荐下一步实现顺序
 

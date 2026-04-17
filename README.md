@@ -21,7 +21,7 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 - 本地 skills 雏形：用 `skills create/view/use/list/delete` 管理 Markdown skill，并可加载到当前 session context。
 - cron 雏形：用 `cron add/list/run-due/run/delete` 保存和触发轻量 scheduled tasks。
 - MCP-like 会话导出：用 `mcp resources/sessions/session/search` 导出 session 数据，导出路径会做密钥文本脱敏。
-- 本地进化闭环雏形：`experience record/list/view/summarize` 保存结构化经验卡；`validate_deliverable` 和 `run_tests` 失败会自动记录经验；`skills propose/candidates/view-candidate/promote` 支持候选 skill，经显式晋升后才进入稳定 skill。
+- 本地进化闭环雏形：`experience record/list/view/summarize` 保存结构化经验卡；`validate_deliverable` 和 `run_tests` 失败会自动记录经验；`self_evolve status/propose/validate/run` 可从经验池归纳候选 skill 并做验证；`skills propose/candidates/view-candidate/promote` 支持候选 skill，经显式晋升后才进入稳定 skill。
 - delegation 骨架：child sessions、child-agent summary、parallel delegation、depth limits、child tool restrictions。
 - 可配置权限与工具 allowlist。
 - Code-agent benchmark fixtures：覆盖单轮、多轮、JavaScript、Python、多文件修改任务。
@@ -183,9 +183,14 @@ experience record status=failed failure_type=test_failure goal='修复测试' ::
 experience list
 experience view <experience-id>
 experience summarize
+self_evolve status
+self_evolve run name=test-failure-recovery failure_type=test_failure min_count=2 command='discover -s tests -v'
+skills view-candidate <candidate-id>
+skills promote <candidate-id>
 ```
 
 这个机制不是训练式 RL，而是最小本地进化闭环：失败先变成可审计经验，再由经验生成候选 skill，最后通过显式 promote 进入稳定能力。
+`self_evolve run` 不会直接覆盖稳定 skill；它只生成候选并记录验证结果，是否 promote 仍是显式动作。
 
 Cron jobs 存在 `~/.simple_hermes_codex/cron_jobs.json`，也可以通过 `SIMPLE_HERMES_CRON_PATH` 改位置。当前没有内置常驻 daemon，外部定时调用 `cron run-due` 即可触发到期任务：
 
@@ -361,6 +366,22 @@ benchmark trace 会保存在：
 
 ```text
 benchmark_runs/<run-id>/traces/
+```
+
+## 自进化离线试验
+
+不依赖 API key 的最小试验脚本：
+
+```bash
+python3 scripts/run_self_evolution_experiment.py
+```
+
+它会在 `self_evolution_runs/<run-id>/` 下创建隔离 workspace、写入两张 `test_failure` 经验卡、运行 `self_evolve run` 生成候选 skill，并用 demo 项目的 unittest 作为验证门。输出中的 `summary.json` 会记录经验池、候选 skill、验证状态和路径。
+
+如果想在隔离的试验 skill 目录里连同 promote 一起演示：
+
+```bash
+python3 scripts/run_self_evolution_experiment.py --promote
 ```
 
 ## 和 Full Hermes 的对应关系

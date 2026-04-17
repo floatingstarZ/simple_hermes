@@ -408,7 +408,16 @@ DailyTrack 端到端测试暴露了一个更根本的问题：继续给主循环
 - MCP-like 导出还不是完整 MCP server。
 - DailyTrack 能力已经能进入正确 workflow，但完整端到端产物仍受后端稳定性、网络源可用性和长任务调度影响，需要继续保留 trace 做回归。
 
-## 11. 后续建议
+## 11. 自进化试验补丁
+
+2026-04-17 增加了一个不依赖 API key 的本地自进化实验闭环：
+
+- `self_evolve status/propose/validate/run`：从 `.simple_hermes/evolution/<session>/experience.jsonl` 中读取同类经验卡，归纳候选 Markdown skill，并把验证记录写回 candidate metadata。
+- `self_evolve run` 默认仍只写候选区，不覆盖稳定 skill；进入 `~/.simple_hermes_codex/skills/` 仍需要显式 `skills promote <candidate-id>`。
+- `scripts/run_self_evolution_experiment.py`：创建隔离 demo workspace，写入两张 `test_failure` 经验卡，生成 `test-failure-recovery` 候选 skill，并用 unittest 作为验证门。
+- 这一步验证的是“经验卡 -> 候选 skill -> 验证记录”的工程闭环，不是 RL 训练，也不是自动修改自身代码。
+
+## 12. 后续建议
 
 优先级较高的改进：
 

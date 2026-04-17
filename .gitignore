@@ -13,6 +13,8 @@ venv/
 traces/
 benchmark_runs/
 test_results/
+self_evolution_runs/
+.simple_hermes/
 
 # The sandbox is a nested local repo used by code-agent integration tests.
 fixtures/code_agent_sandbox/.git/

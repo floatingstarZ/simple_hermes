@@ -176,6 +176,11 @@ class BuiltInTools:
             self.experience,
         )
         self.registry.register(
+            "self_evolve",
+            "Run the local self-evolution loop over experience cards. Usage: self_evolve status|propose [name=N] [failure_type=T] [min_count=N]|validate <candidate-id> [command='discover -s tests -v']|run ...",
+            self.self_evolve,
+        )
+        self.registry.register(
             "validate_deliverable",
             "Validate a generated deliverable. Usage: validate_deliverable <path> [min_items=N] [required_fields=a,b,c] [required_headings=A,B]. Reports schema/content gaps and recovery hints.",
             self.validate_deliverable,
@@ -775,6 +780,14 @@ class BuiltInTools:
         (candidate_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return candidate_id
 
+    def _update_skill_candidate_metadata(self, candidate_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        metadata = self._load_skill_candidate_metadata(candidate_id)
+        if metadata is None:
+            return None
+        metadata.update(updates)
+        self._candidate_metadata_path(candidate_id).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return metadata
+
     def _evolution_session_dir(self) -> Path:
         """当前项目、当前会话的进化状态目录。
 
@@ -941,6 +954,227 @@ class BuiltInTools:
             return f"Recorded experience {card['id']}: {self._experience_log_path()}"
 
         return "Usage: experience record [key=value ...] ::: evidence | list | view <id> | summarize"
+
+    def _experience_cards_for_evolution(self, options: dict[str, str]) -> tuple[list[dict[str, Any]], str]:
+        cards = self._load_experience_cards()
+        failure_type = options.get("failure_type") or options.get("type")
+        target = options.get("target")
+        usable = [
+            card
+            for card in cards
+            if str(card.get("status") or "").lower() in {"failed", "observed", "recovered", "ok"}
+        ]
+        if failure_type:
+            usable = [card for card in usable if str(card.get("failure_type") or "") == failure_type]
+        if target:
+            usable = [card for card in usable if str(card.get("target") or "") == target]
+        if failure_type:
+            focus = failure_type
+        elif usable:
+            counts: dict[str, int] = {}
+            for card in usable:
+                key = str(card.get("failure_type") or "unknown")
+                counts[key] = counts.get(key, 0) + 1
+            focus = max(sorted(counts), key=lambda key: counts[key])
+            usable = [card for card in usable if str(card.get("failure_type") or "unknown") == focus]
+        else:
+            focus = "unknown"
+        return usable, focus
+
+    def _safe_evolution_skill_name(self, raw: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw.strip().lower()).strip("-._")
+        cleaned = cleaned or "experience-recovery"
+        return self._safe_skill_name(cleaned[:80]) or "experience-recovery"
+
+    def _skill_candidate_quality_issues(self, content: str) -> list[str]:
+        issues: list[str] = []
+        marker_hits, pattern_hits = self._placeholder_hits(content)
+        if marker_hits or pattern_hits:
+            issues.append(f"unresolved markers remain: markers={marker_hits} patterns={pattern_hits}")
+        for heading in ("## When to Use", "## Recovery Workflow", "## Validation"):
+            if heading not in content:
+                issues.append(f"missing required heading: {heading}")
+        if len(content.strip().split()) < 60:
+            issues.append("candidate is too short to be a reusable skill")
+        return issues
+
+    def _build_evolution_skill_body(self, name: str, cards: list[dict[str, Any]], focus: str) -> str:
+        targets = sorted({str(card.get("target") or "-") for card in cards})[:6]
+        source_ids = [str(card.get("id")) for card in cards if card.get("id")][:8]
+        if focus == "test_failure":
+            workflow = [
+                "Reproduce the failing command before editing, and preserve the first failing assertion or traceback.",
+                "Patch the smallest source area that explains the failure; avoid changing tests unless the requested behavior changed.",
+                "Rerun the narrow failing test first, then run the broader suite before reporting completion.",
+                "Record a new experience card when the same failure shape recurs after a fix.",
+            ]
+            validation = "Run the narrow failing test and then `python -m unittest discover -s tests -v` or the project equivalent."
+        elif focus == "zero_tests":
+            workflow = [
+                "Inspect the test discovery path, file naming, and package layout before assuming the project is healthy.",
+                "Run discovery with verbose output and confirm at least one test case is collected.",
+                "Fix invocation or package layout before using a green result as evidence.",
+            ]
+            validation = "The validation run must report a non-zero test count and exit successfully."
+        elif "deliverable" in focus:
+            workflow = [
+                "Regenerate the deliverable from grounded source artifacts instead of patching individual visible cells.",
+                "Check required fields, table cells, and links against the source inventory before final validation.",
+                "Rerun the deliverable validator with the same required fields or headings.",
+            ]
+            validation = "Run `validate_deliverable` with the original required fields or headings and keep the source artifacts listed."
+        else:
+            workflow = [
+                "Reproduce the observed failure and keep the shortest command or file path that demonstrates it.",
+                "Identify the durable rule behind the failure before editing files.",
+                "Apply the smallest change that satisfies the evidence, then rerun the relevant validator.",
+                "If the same pattern appears again, update this candidate with the new evidence before promotion.",
+            ]
+            validation = "Run the closest available test, validator, or benchmark for the affected target."
+
+        lines = [
+            f"# {name}",
+            "",
+            "## When to Use",
+            f"Use this skill when Simple Hermes encounters repeated `{focus}` experiences in this project.",
+            f"Observed targets: {', '.join(targets) if targets else '-'}",
+            "",
+            "## Recovery Workflow",
+            *[f"{index}. {step}" for index, step in enumerate(workflow, start=1)],
+            "",
+            "## Evidence",
+            f"Generated from {len(cards)} experience card(s): {', '.join(source_ids) if source_ids else '-'}",
+            "Treat these cards as pointers to inspect through `experience view <id>` rather than copying raw logs into the skill.",
+            "",
+            "## Validation",
+            validation,
+            "Only promote this candidate after a fresh validation run passes in the current project state.",
+        ]
+        return "\n".join(lines)
+
+    def _self_evolve_status(self) -> str:
+        cards = self._load_experience_cards()
+        candidates = self._list_skill_candidates()
+        by_type: dict[str, int] = {}
+        for card in cards:
+            key = str(card.get("failure_type") or "unknown")
+            by_type[key] = by_type.get(key, 0) + 1
+        payload = {
+            "experience_log": str(self._experience_log_path()),
+            "experience_cards": len(cards),
+            "by_failure_type": dict(sorted(by_type.items())),
+            "candidate_dir": str(self._skill_candidate_root()),
+            "skill_candidates": len(candidates),
+            "validated_candidates": sum(1 for item in candidates if item.get("status") == "validated"),
+            "promoted_candidates": sum(1 for item in candidates if item.get("status") == "promoted"),
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def _self_evolve_propose(self, options: dict[str, str]) -> str:
+        cards, focus = self._experience_cards_for_evolution(options)
+        try:
+            min_count = max(1, int(options.get("min_count") or options.get("min-count") or "1"))
+        except ValueError:
+            return "Invalid min_count; expected an integer."
+        if len(cards) < min_count:
+            return f"Not enough experience cards for self-evolution: found {len(cards)}, need {min_count}."
+        name = self._safe_evolution_skill_name(options.get("name") or f"{focus}-recovery")
+        body = self._build_evolution_skill_body(name, cards[-min(8, len(cards)) :], focus)
+        issues = self._skill_candidate_quality_issues(body)
+        if issues:
+            return "Refusing to create weak self-evolution candidate:\n" + "\n".join(f"- {issue}" for issue in issues)
+        source_ids = [str(card.get("id")) for card in cards if card.get("id")]
+        candidate_id = self._create_skill_candidate(
+            name,
+            body,
+            source_experience=",".join(source_ids[:20]),
+            reason=f"self_evolve propose: focus={focus} cards={len(cards)}",
+        )
+        self._update_skill_candidate_metadata(
+            candidate_id,
+            {
+                "generated_by": "self_evolve",
+                "failure_type": focus,
+                "source_cards": source_ids[:20],
+                "card_count": len(cards),
+            },
+        )
+        return f"Created self-evolution candidate {candidate_id}: {self._candidate_skill_path(candidate_id)}"
+
+    def _self_evolve_validate(self, candidate_id: str, options: dict[str, str]) -> str:
+        metadata = self._load_skill_candidate_metadata(candidate_id)
+        path = self._candidate_skill_path(candidate_id)
+        if metadata is None or not path.is_file():
+            return f"Skill candidate not found: {candidate_id}"
+        content = path.read_text(encoding="utf-8", errors="replace")
+        issues = self._skill_candidate_quality_issues(content)
+        command = options.get("command", "").strip()
+        command_passed = True
+        if command:
+            command_result = self.run_tests(command)
+            command_passed = "exit code: 0" in command_result and "Ran 0 tests" not in command_result
+            if not command_passed:
+                issues.append(f"validation command failed: {command}")
+        status = "passed" if not issues else "failed"
+        validation = {
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "status": status,
+            "command": command,
+            "issues": issues,
+        }
+        validations = metadata.get("validations")
+        if not isinstance(validations, list):
+            validations = []
+        validations.append(validation)
+        updates: dict[str, Any] = {"validations": validations}
+        if status == "passed":
+            updates["status"] = "validated"
+            updates["validated_at"] = validation["created_at"]
+        self._update_skill_candidate_metadata(candidate_id, updates)
+        lines = [f"SELF_EVOLVE_VALIDATION {status}: {candidate_id}"]
+        if issues:
+            lines.extend(f"- issue: {issue}" for issue in issues)
+        if command:
+            lines.append(f"- command: {command}")
+            lines.append("- command_result: " + ("passed" if command_passed else "failed"))
+        return self._truncate("\n".join(lines))
+
+    def self_evolve(self, text: str) -> str:
+        """从 experience cards 归纳候选 skill，并用显式验证守住写入边界。"""
+        raw = text.strip()
+        action, _, rest = raw.partition(" ")
+        action = action.lower() or "status"
+        if action in {"status", "summary"}:
+            return self._self_evolve_status()
+        if action == "propose":
+            try:
+                options = self._parse_key_value_tokens(shlex.split(rest))
+            except ValueError as exc:
+                return f"Invalid self_evolve arguments: {exc}"
+            return self._self_evolve_propose(options)
+        if action == "validate":
+            try:
+                parts = shlex.split(rest)
+            except ValueError as exc:
+                return f"Invalid self_evolve arguments: {exc}"
+            if not parts:
+                return "Usage: self_evolve validate <candidate-id> [command='discover -s tests -v']"
+            candidate_id = parts[0]
+            options = self._parse_key_value_tokens(parts[1:])
+            return self._self_evolve_validate(candidate_id, options)
+        if action == "run":
+            try:
+                options = self._parse_key_value_tokens(shlex.split(rest))
+            except ValueError as exc:
+                return f"Invalid self_evolve arguments: {exc}"
+            proposed = self._self_evolve_propose(options)
+            if not proposed.startswith("Created self-evolution candidate "):
+                return proposed
+            candidate_id = proposed.split()[3].rstrip(":")
+            command = options.get("command", "")
+            validation = self._self_evolve_validate(candidate_id, {"command": command} if command else {})
+            return proposed + "\n" + validation
+        return "Usage: self_evolve status|propose [name=N] [failure_type=T] [min_count=N]|validate <candidate-id> [command='discover -s tests -v']|run ..."
 
     def skills(self, text: str) -> str:
         """本地 Markdown skill 管理入口，先实现最小可用的 procedural memory。"""

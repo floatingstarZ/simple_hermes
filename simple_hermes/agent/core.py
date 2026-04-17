@@ -358,6 +358,8 @@ class SimpleAgent:
             ("artifact", "artifact"),
             ("experience ", "experience"),
             ("experience", "experience"),
+            ("self_evolve ", "self_evolve"),
+            ("self_evolve", "self_evolve"),
             ("validate_deliverable ", "validate_deliverable"),
             ("background ", "background"),
             ("read_lines ", "read_lines"),
@@ -395,6 +397,7 @@ class SimpleAgent:
             "patch_file <path> ::: <target> ::: <replacement>, read_lines <path> <start> <end>, "
             "glob <pattern>, project_overview, diff [path], background <start|list|status|tail|wait|stop>, "
             "skills <list|view|use|create|propose|candidates|promote>, experience <record|list|view|summarize>, "
+            "self_evolve <status|propose|validate|run>, "
             "cron <add|list|run-due|run|delete>, recall_all <query>, mcp <resources|sessions|session|search>, "
             "fetch_url <url>, dependency_scan, credential_audit, search <query>, summarize"
         )
@@ -1081,7 +1084,7 @@ class SimpleAgent:
         name = call.name.strip()
         argument = call.argument.strip()
         lowered = name.lower()
-        compound_tools = {"background", "skills", "cron", "mcp", "todo", "experience"}
+        compound_tools = {"background", "skills", "cron", "mcp", "todo", "experience", "self_evolve"}
         parts = lowered.split(maxsplit=1)
         if len(parts) == 2 and parts[0] in compound_tools:
             merged_argument = f"{parts[1]} {argument}".strip()

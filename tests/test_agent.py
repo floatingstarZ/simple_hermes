@@ -289,6 +289,12 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertEqual(summary.tool_used, "experience")
         self.assertIn('"smoke": 1', summary.final_response)
 
+    def test_agent_runs_self_evolve_command(self) -> None:
+        result = self.agent.run("self_evolve status")
+
+        self.assertEqual(result.tool_used, "self_evolve")
+        self.assertIn('"experience_cards": 0', result.final_response)
+
     def test_agent_fallback_message_for_unknown_intent(self) -> None:
         result = self.agent.run("write me a poem")
         self.assertIsNone(result.tool_used)

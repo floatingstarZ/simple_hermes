@@ -62,6 +62,7 @@ class ToolTests(unittest.TestCase):
         self.assertIn("todo", text)
         self.assertIn("artifact", text)
         self.assertIn("experience", text)
+        self.assertIn("self_evolve", text)
         self.assertIn("validate_deliverable", text)
         self.assertIn("fetch_url", text)
         self.assertIn("credential_audit", text)
@@ -640,6 +641,33 @@ class ToolTests(unittest.TestCase):
         self.assertIn("AssertionError on discount", viewed)
         self.assertIn('"test_failure": 1', summary)
         self.assertTrue((self.project_root / ".simple_hermes" / "evolution").exists())
+
+    def test_self_evolve_generates_and_validates_candidate_from_experience(self) -> None:
+        self.tools.skill_candidates_dir = Path(self.temp_dir.name) / "skill_candidates"
+        self.tools.experience(
+            "record status=failed failure_type=test_failure target=run_tests ::: AssertionError on discount"
+        )
+        self.tools.experience(
+            "record status=failed failure_type=test_failure target=run_tests ::: ValueError in price parser"
+        )
+
+        text = self.tools.self_evolve("run name=test-failure-recovery failure_type=test_failure min_count=2")
+        candidate_id = text.split()[3].rstrip(":")
+        listed = self.tools.skills("candidates")
+        viewed = self.tools.skills(f"view-candidate {candidate_id}")
+        status = self.tools.self_evolve("status")
+
+        self.assertIn("Created self-evolution candidate", text)
+        self.assertIn("SELF_EVOLVE_VALIDATION passed", text)
+        self.assertIn("status=validated", listed)
+        self.assertIn("## Recovery Workflow", viewed)
+        self.assertIn('"experience_cards": 2', status)
+        self.assertIn('"validated_candidates": 1', status)
+
+    def test_self_evolve_requires_enough_experience(self) -> None:
+        text = self.tools.self_evolve("propose failure_type=test_failure min_count=1")
+
+        self.assertIn("Not enough experience cards", text)
 
     def test_skills_candidate_propose_view_and_promote(self) -> None:
         self.tools.skills_dir = Path(self.temp_dir.name) / "skills"
