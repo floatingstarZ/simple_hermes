@@ -377,6 +377,209 @@ For a simpler self-evolving agent, the useful design takeaways are:
 - Whether `MAX_TURNS` should be raised or the runner should detect "last output was a tool call" and continue until a final non-tool assistant message appears.
 - Whether large tool outputs should be summarized before being appended to `input`.
 
+## Detailed Prompt Archaeology
+
+This section spells out the effective prompt more explicitly. The raw prompt is not just natural language; it is a bundle of text, JSON schemas, conversation state, and generation controls.
+
+### Prompt Components And Checksums
+
+The first canonical request, call `1`, is the cleanest view of the initial prompt before tool outputs start accumulating.
+
+| Component | Field | Size / checksum |
+|---|---|---|
+| Static instruction block | `request_kwargs.instructions` | 372 lines, 24,369 chars, SHA-256 `abca4ceda73d7d32c4c158d9aa460f158a9e4eec8b6bfea47cf929ddac61c92f` |
+| User task | `request_kwargs.input[0].content` | SHA-256 `98a1357b0ea761332159592e6a621bef09311dcdf06414a219c08b581f175b3a` |
+| Tool schemas | `request_kwargs.tools` | 27 tools, 44,582 chars when pretty-printed, SHA-256 `2e13c0ad73cb3af96b807fc5549a1a857dbbd03a01c7bfb50158bd72472649e8` |
+| Runtime controls | request fields excluding `instructions/input/tools` | stable across all canonical turns |
+
+So the initial turn already contains a large prompt surface before any task-specific tool output is returned:
+
+- Static Hermes persona / operating policy.
+- DailyTrack project context.
+- The user task.
+- Full function schemas for all available tools.
+- Reasoning and streaming controls.
+
+### Static Instruction Layer
+
+The static `instructions` field is not a minimal system prompt. It is a concatenated operating manual with several behavioral layers:
+
+| Layer | Observed purpose | Effect on behavior |
+|---|---|---|
+| Hermes persona | Defines persistent memory behavior, skill maintenance, and tone expectations. | Pushes the agent toward using memory/skills as durable procedural state. |
+| Tool-use enforcement | Requires concrete tool use when taking action. | Explains why the run quickly enters tool calls instead of giving a natural-language plan only. |
+| Persistence policy | Instructs the agent to keep calling tools until task completion and verification. | Encourages long action chains and verification calls. |
+| Mandatory lookup policy | Requires tools for current facts, date/time, system state, hashes, versions, etc. | Prevents answering DailyTrack from memory alone. |
+| Missing-context policy | Tells the agent to retrieve context rather than guess. | Produces early reads of AGENTS/CLAUDE/MEMORY and skill files. |
+| Skill inventory | Lists skills with names and short descriptions. | Guides initial `skill_view` calls. |
+| Project context | Injects DailyTrack conventions and completion criteria. | Supplies the "daily track means Beijing yesterday + update global state" rule without requiring the user to repeat it. |
+
+The Full Prompt Appendix below contains the exact raw `instructions` block. In practical terms, this block is closer to an agent operating system prompt than a simple role prompt.
+
+### Dynamic Input Layer
+
+`request_kwargs.input` is the dynamic transcript. It starts with only one item:
+
+```json
+{"role": "user", "content": "...daily track task..."}
+```
+
+After each turn, Hermes appends model output items and tool outputs back into the next request. It does not use `previous_response_id`; every canonical request is self-contained.
+
+Representative progression:
+
+| Canonical call | Input items | Input item mix | Input tokens | Cached input tokens | Model function calls emitted |
+|---:|---:|---|---:|---:|---|
+| 1 | 1 | `user=1` | 12,402 | 6,784 | `skill_view`, `skill_view`, `read_file`, `read_file`, `read_file` |
+| 3 | 13 | `user=1`, `reasoning=1`, `assistant=1`, `function_call=5`, `function_call_output=5` | 35,037 | 5,632 | `todo` |
+| 21 | 81 | `user=1`, `reasoning=10`, `assistant=10`, `function_call=30`, `function_call_output=30` | 89,027 | 5,632 | `browser_navigate` x3 |
+| 41 | 145 | `user=1`, `reasoning=20`, `assistant=20`, `function_call=52`, `function_call_output=52` | 111,424 | 5,632 | `execute_code` |
+| 89 | 249 | `user=1`, `reasoning=44`, `assistant=44`, `function_call=80`, `function_call_output=80` | 159,581 | 124,544 | `todo` |
+
+This is the main reason later calls are huge. The LLM sees not just "what happened", but raw tool outputs, command strings, JSON snippets, file contents, diffs, and verification results.
+
+### Tool Schema Layer
+
+The tool schema layer is a major part of the prompt. It gives the model both capability and policy.
+
+Examples of policy embedded in tool descriptions:
+
+- `terminal` says not to use shell for reading/searching/editing when dedicated Hermes tools exist.
+- `execute_code` says to use it for 3+ tool calls with processing logic, loops, filtering, retries, or reducing large outputs before context insertion.
+- `patch` says to prefer targeted find-and-replace edits and describes patch mode.
+- `todo` defines when planning state should be used and enforces only one in-progress item.
+- `skill_view` tells the model how to load skill bodies and linked files.
+
+This means the tool schemas are not neutral API docs. They are part of the prompt policy and materially influence model behavior.
+
+The Full Prompt Appendix includes every tool schema exactly as captured in the first canonical request.
+
+### Runtime Control Layer
+
+The non-body request parameters are also meaningful:
+
+```json
+{
+  "model": "gpt-5.4",
+  "store": false,
+  "reasoning": {
+    "effort": "medium",
+    "summary": "auto"
+  },
+  "include": [
+    "reasoning.encrypted_content"
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "prompt_cache_key": "20260417_164152_e58361"
+}
+```
+
+Implications:
+
+- `store: false` plus no `previous_response_id` means Hermes owns transcript replay.
+- `tool_choice: auto` allows the model to either call tools or produce text, but the instruction layer strongly biases toward tools.
+- `parallel_tool_calls: true` allows multi-tool emission in one turn. The first turn emitted five tool calls.
+- `include: ["reasoning.encrypted_content"]` causes encrypted reasoning payloads to appear in trace input/history. These are not directly human-readable, but they are part of the replayed model context.
+- `prompt_cache_key` stays stable, enabling cache reuse across the long run.
+
+### Turn-By-Turn Tool Intention
+
+The function-call sequence gives a compact view of how the prompt drove behavior:
+
+```text
+1:  skill_view, skill_view, read_file, read_file, read_file
+3:  todo
+5:  terminal, read_file, read_file, search_files, search_files, read_file, read_file
+7:  read_file x5
+9:  read_file x6
+11: read_file x2
+13: terminal
+15: terminal
+17: terminal
+19: terminal
+21: browser_navigate x3
+23: search_files, terminal, terminal, terminal
+25: terminal x3
+27: terminal x4
+29: terminal x3
+31: terminal
+33: terminal
+35: terminal
+37: terminal
+39: execute_code
+41: execute_code
+43: execute_code
+45: execute_code
+47: execute_code
+49: execute_code
+51: execute_code
+53: terminal
+55: execute_code
+57: execute_code
+59: execute_code
+61: execute_code
+63: execute_code
+65: execute_code
+67: execute_code
+69: terminal
+71: read_file
+73: execute_code
+75: patch
+77: patch
+79: execute_code
+81: read_file x5
+83: execute_code
+85: execute_code
+87: execute_code
+89: todo
+```
+
+The phases are visible:
+
+1. Load skills and repository context.
+2. Establish task plan.
+3. Gather DailyTrack state and source scripts.
+4. Run data collection.
+5. Filter and synthesize.
+6. Patch written files.
+7. Verify updated global state.
+8. Attempt final todo update, then hit turn cap.
+
+### Why The Appendix Uses The First Turn As The Full Prompt
+
+The first canonical request is the right place to embed the complete static prompt because:
+
+- It includes full `instructions`.
+- It includes full user task.
+- It includes full tool schemas.
+- It has no large tool-output history yet, so the prompt body is readable in Markdown.
+
+The final canonical request is also "complete", but embedding it directly into `Analysis.md` would duplicate much of the 97 MB raw JSONL, because it includes 249 input items and 80 tool outputs. For that reason, this document includes the complete static prompt and a precise structural analysis of the dynamic prompt, while the raw final input remains in:
+
+```text
+Survey/hermes_dailytrack_capture/runs/20260417_164151/openai_raw_calls.jsonl
+```
+
+To reconstruct any turn exactly:
+
+```python
+import json
+from pathlib import Path
+
+trace = Path("Survey/hermes_dailytrack_capture/runs/20260417_164151/openai_raw_calls.jsonl")
+turn = 89
+
+for line in trace.open(encoding="utf-8"):
+    record = json.loads(line)
+    if record.get("api") == "responses.stream" and record.get("call_index") == turn:
+        raw_request = record["request_kwargs"]
+        raw_response = record["response"]
+        break
+```
+
+For research, treat `raw_request` as the exact model input envelope and `raw_response` as the exact completed model output envelope for that turn.
+
 ## Full Prompt Appendix
 
 This appendix is copied from the first canonical `responses.stream` request in `runs/20260417_164151/openai_raw_calls.jsonl`. It is the closest raw answer to "what prompt did Hermes actually send to the LLM" for the initial turn.
