@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DATE="2026-04-14"
-SOURCE_ROOT="/Users/hzy/Desktop/work/DailyTrack_NewTech"
+SOURCE_ROOT="${DAILYTRACK_SOURCE_ROOT:-}"
 WORK_ROOT=""
 LIVE=0
 STEPS="${SIMPLE_HERMES_MAX_STEPS:-300}"
@@ -21,7 +21,7 @@ Usage:
 
 Options:
   --date YYYY-MM-DD       Target DailyTrack date. Default: 2026-04-14
-  --source PATH           Source DailyTrack repo. Default: /Users/hzy/Desktop/work/DailyTrack_NewTech
+  --source PATH           Source DailyTrack repo. Required unless DAILYTRACK_SOURCE_ROOT is set.
   --workdir PATH          Existing or desired isolated workdir. Default: /tmp/dailytrack_sh_case_<date>_<timestamp>
   --live                  Run directly in --source instead of making an isolated copy.
   --steps N               SIMPLE_HERMES_MAX_STEPS. Default: 300
@@ -32,8 +32,9 @@ Options:
 
 Environment:
   SIMPLE_HERMES_COMMAND   Command to run. Default: simple_hermes_codex
-  SIMPLE_HERMES_BACKEND   Defaulted to hermes-runtime if unset.
-  Proxy env vars          Defaulted to 127.0.0.1:7890 if unset.
+  SIMPLE_HERMES_BACKEND   Optional backend. Inherits current environment if set.
+  DAILYTRACK_SOURCE_ROOT  Default source repo path for --source.
+  Proxy env vars          Inherited from current environment if set.
 
 The default mode is isolated: the script copies DailyTrack to /tmp and edits that
 copy. Use --live only when you intentionally want to modify the real project.
@@ -92,6 +93,11 @@ if [[ -z "$SESSION_ID" ]]; then
   SESSION_ID="dailytrack-case-${safe_date}-${timestamp}"
 fi
 
+if [[ -z "$SOURCE_ROOT" ]]; then
+  echo "Source DailyTrack repo is required. Pass --source PATH or set DAILYTRACK_SOURCE_ROOT." >&2
+  exit 2
+fi
+
 if [[ ! -d "$SOURCE_ROOT" ]]; then
   echo "Source DailyTrack repo not found: $SOURCE_ROOT" >&2
   exit 1
@@ -135,13 +141,6 @@ cat > "$input_path" <<EOF
 exit
 EOF
 
-export https_proxy="${https_proxy:-http://127.0.0.1:7890}"
-export http_proxy="${http_proxy:-http://127.0.0.1:7890}"
-export all_proxy="${all_proxy:-socks5://127.0.0.1:7890}"
-export HTTPS_PROXY="${HTTPS_PROXY:-$https_proxy}"
-export HTTP_PROXY="${HTTP_PROXY:-$http_proxy}"
-export ALL_PROXY="${ALL_PROXY:-$all_proxy}"
-export SIMPLE_HERMES_BACKEND="${SIMPLE_HERMES_BACKEND:-hermes-runtime}"
 export SIMPLE_HERMES_MAX_STEPS="$STEPS"
 export SIMPLE_HERMES_SESSION_ID="$SESSION_ID"
 export SIMPLE_HERMES_PROJECT_ROOT="$PROJECT_ROOT"

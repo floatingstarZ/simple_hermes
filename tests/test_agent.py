@@ -542,19 +542,17 @@ class AgentPlanningTests(unittest.TestCase):
         self.assertIn("backend adapters", result.final_response)
         self.assertLessEqual(result.steps, 2)
 
-    def test_cli_detects_repo_root_when_cwd_is_inside_repo(self) -> None:
+    def test_cli_detects_repo_root_when_cwd_is_inside_independent_project(self) -> None:
         inside = self.project_root / "subdir" / "nested"
         inside.mkdir(parents=True, exist_ok=True)
         (self.project_root / "pyproject.toml").write_text("[project]\nname = 'tmp'\n", encoding="utf-8")
-        (self.project_root / "simple_hermes").mkdir(exist_ok=True)
         detected = _detect_project_root(cwd=inside, module_file=self.project_root / "simple_hermes" / "cli.py")
         self.assertEqual(detected, self.project_root.resolve())
 
-    def test_cli_uses_cwd_when_cwd_is_outside_source_repo(self) -> None:
+    def test_cli_uses_cwd_when_no_project_markers_exist(self) -> None:
         outside = Path(self.temp_dir.name) / "outside"
         outside.mkdir(parents=True, exist_ok=True)
         (self.project_root / "pyproject.toml").write_text("[project]\nname = 'tmp'\n", encoding="utf-8")
-        (self.project_root / "simple_hermes").mkdir(exist_ok=True)
         detected = _detect_project_root(cwd=outside, module_file=self.project_root / "simple_hermes" / "cli.py")
         self.assertEqual(detected, outside.resolve())
 

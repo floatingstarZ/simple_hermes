@@ -1,21 +1,82 @@
 # Simple Hermes Codex
 
-Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参考 Hermes 的核心思路，但不是完整 Hermes 的复刻。这个项目的目标是把 Agent loop、工具层、会话存储、上下文压缩、后台任务和 benchmark harness 放在一个足够小、足够可读的代码库里，方便逐步改成一个更通用的 code agent。
+Simple Hermes Codex 是一个可以独立 clone、setup、运行的轻量 code-agent 项目。它参考 Hermes 的核心思路，把 agent loop、工具层、会话存储、上下文压缩、后台任务和 benchmark harness 放在一个小而完整的 Python 仓库里。
 
-当前版本已经不只是一次性的工具调用 demo。它可以解析项目、读写代码、运行测试、保留项目级长期会话、把长上下文压缩成 continuation session，并支持后台运行较长的 shell 任务。
+它不是完整 Hermes 的复刻，也不是生产级 sandbox。默认模式不需要 API key，可以用规则 fallback 学习控制流和显式工具命令；配置 backend 后，可以作为一个最小 code agent 在项目中读写代码、运行测试、保留长期会话并处理较长后台任务。
 
-## 当前能力
+## 快速开始
 
-- 多步 `SimpleAgent` loop：支持 backend planning 和显式 tool call。
-- 规则模式 fallback：没有 LLM backend 时仍可用于学习和显式命令调试。
-- 可选 OpenAI-compatible backend。
-- 可选 Hermes runtime bridge：复用 Hermes 的 provider/auth 解析。
+这个仓库可以作为独立 Python 项目安装。clone 到任意目录后，在仓库根目录运行：
+
+```bash
+./setup.sh
+```
+
+`setup.sh` 会创建 `.venv/`，优先把当前 checkout 安装为 editable package，并验证 `simple_hermes_codex` console script 已生成。如果当前 Python 环境缺少构建依赖且无法联网下载，脚本会退到本地 `.pth` + console script 安装，仍然可以直接运行：
+
+```bash
+.venv/bin/simple_hermes_codex
+```
+
+也可以使用标准 pip 流程：
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+simple_hermes_codex
+```
+
+常用环境变量：
+
+```bash
+export SIMPLE_HERMES_PROJECT_ROOT=/path/to/project
+export SIMPLE_HERMES_MAX_STEPS=300
+```
+
+默认项目根会从启动命令时所在目录向上查找常见项目标记，例如 `pyproject.toml`、`package.json`、`Cargo.toml`、`go.mod` 或 `.git/`；找不到标记时使用当前目录。这个检测不要求目标项目包含 `simple_hermes/` 源码目录。要让 agent 操作指定项目，最稳妥的方式是在目标项目目录里启动，或显式设置 `SIMPLE_HERMES_PROJECT_ROOT`。
+
+## 试用命令
+
+进入 CLI 后可以先试这些命令：
+
+```text
+help
+/status
+/trace
+read README.md
+project_overview
+search SimpleAgent
+terminal pwd
+run_tests
+history
+sessions
+lineage
+```
+
+运行项目测试：
+
+```bash
+python3 scripts/run_tests_with_results.py
+```
+
+只使用标准库 unittest：
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+## 包含什么
+
+- 多步 `SimpleAgent` loop：支持 backend planning、显式 tool call 和防循环 guard。
+- 规则模式 fallback：没有 LLM backend 时仍可用于学习、调试和显式命令操作。
+- 可选 OpenAI-compatible backend 和可选 Hermes runtime bridge。
 - 代码工具：`read`、`read_lines`、`tree`、`glob`、`project_overview`、`search`、`write_file`、`patch_file`、`diff`、`terminal`、`run_tests`。
-- 扩展工具雏形：`fetch_url`、`dependency_scan`、`credential_audit`。`credential_audit` 只列路径，不读取或打印密钥内容。
-- 后台任务工具：`background start/list/status/tail/wait/stop`。
+- 扩展工具：`fetch_url`、`dependency_scan`、`credential_audit`。`credential_audit` 只列路径，不读取或打印密钥内容。
+- 后台任务：`background start/list/status/tail/wait/stop`。
 - 持久化 memory：general memory 和 user profile memory 分开存。
 - SQLite 会话历史：记录 `kind`、`tool_name`、session lineage、descendants、focused recall 和 cross-session recall。
-- 通用 workflow ledger：复杂任务可用 `todo write/add/update/list/clear` 保存阶段进度，并在后续 planner prompt 中恢复 pending/in_progress 状态。
+- 通用 workflow ledger：复杂任务可用 `todo write/add/update/list/clear` 保存阶段进度。
 - 长期会话：默认按 project root 生成稳定 session id，并自动恢复最新 continuation。
 - 上下文压缩：结构化 handoff summary，包含 goal、constraints、progress、files、remaining work。
 - 本地 skills 雏形：用 `skills create/view/use/list/delete` 管理 Markdown skill，并可加载到当前 session context。
@@ -25,15 +86,16 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 - delegation 骨架：child sessions、child-agent summary、parallel delegation、depth limits、child tool restrictions。
 - 可配置权限与工具 allowlist。
 - Code-agent benchmark fixtures：覆盖单轮、多轮、JavaScript、Python、多文件修改任务。
-- 测试 runner：把本地 unittest 日志保存到 `test_results/`。
+- 测试 runner：把本地 unittest 日志保存到 `test_results/` 并生成 HTML 报告。
 
-## 非目标
+## 不包含什么
 
 - 不是生产级 sandbox。
-- 没有实现完整 MCP server、browser automation、gateway adapters、常驻 cron daemon、完整 provider fallback orchestration。
+- 没有实现完整 MCP server、browser automation、gateway adapters、常驻 cron daemon。
+- 没有完整 provider fallback orchestration。
 - 默认权限偏宽松，适合本机实验；在不可信项目上使用前应先打开 restrictive 配置。
 
-## 图
+## 文档与图
 
 图和实现细节说明统一放在 `M_docs/`。Excalidraw 源文件和 SVG companion 由 `python3 render_diagrams.py` 批量生成。
 
@@ -76,26 +138,6 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 - `simple_hermes/memory.py`
 - `simple_hermes/session.py`
 
-## 安装与运行
-
-当前本机使用 wrapper 方式安装命令：
-
-```bash
-cd /Users/hzy/Desktop/work/simple_hermes_codex
-simple_hermes_codex
-```
-
-本机 wrapper 位于 `/Users/hzy/.local/bin/simple_hermes_codex`，指向这个 checkout，并复用主 Hermes runtime 环境。`pyproject.toml` 里也暴露了同名 console script，便于之后走 venv 或 pipx 风格安装。
-
-常用环境变量：
-
-```bash
-export SIMPLE_HERMES_PROJECT_ROOT=/path/to/project
-export SIMPLE_HERMES_MAX_STEPS=300
-```
-
-默认项目根是启动命令时所在的当前目录；如果当前目录位于一个包含 `pyproject.toml` 和 `simple_hermes/` 的源码 checkout 内，会自动提升到该 checkout 根目录。要让 agent 操作别的项目，最稳妥的方式是在目标项目目录里启动，或显式设置 `SIMPLE_HERMES_PROJECT_ROOT`。
-
 ## Planner 模式
 
 规则 fallback 模式：
@@ -117,7 +159,7 @@ Hermes runtime bridge 模式：
 
 ```bash
 export SIMPLE_HERMES_BACKEND=hermes-runtime
-export SIMPLE_HERMES_HERMES_ROOT=/Users/hzy/Desktop/work/hermes-agent
+export SIMPLE_HERMES_HERMES_ROOT=/path/to/hermes-agent
 export SIMPLE_HERMES_PROVIDER=<provider>
 export SIMPLE_HERMES_MODEL=<model>
 ```
@@ -350,6 +392,8 @@ python3 scripts/run_code_agent_benchmark.py
 ```bash
 python3 scripts/run_code_agent_benchmark.py --run-agent --timeout 480
 ```
+
+benchmark runner 不会默认选择 Hermes runtime 或假设相邻目录存在 `hermes-agent`。如果需要真实模型，请先设置 `SIMPLE_HERMES_BACKEND`、`SIMPLE_HERMES_MODEL` 以及对应 provider/API 环境变量；不设置时会使用规则 fallback 模式。
 
 如果 backend 需要本地代理：
 

@@ -26,13 +26,11 @@ In dry-run mode, `ready` should equal `total`; `passed` is expected to be 0 beca
 Run `simple_hermes_codex` against every task and save traces/results under `benchmark_runs/`:
 
 ```bash
-https_proxy=http://127.0.0.1:7890 \
-http_proxy=http://127.0.0.1:7890 \
-all_proxy=socks5://127.0.0.1:7890 \
-HTTPS_PROXY=http://127.0.0.1:7890 \
-HTTP_PROXY=http://127.0.0.1:7890 \
-ALL_PROXY=socks5://127.0.0.1:7890 \
 python3 scripts/run_code_agent_benchmark.py --run-agent
 ```
+
+The benchmark runner does not force a backend. Configure `SIMPLE_HERMES_BACKEND`,
+`SIMPLE_HERMES_MODEL`, and related provider variables before `--run-agent` if you
+want a real model instead of rule-based fallback mode.
 
 The generated `summary.json` records each workspace, initial test result, final test result, and trace path.

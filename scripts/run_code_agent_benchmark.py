@@ -93,8 +93,6 @@ def agent_env(task_dir: Path, session_id: str) -> dict[str, str]:
     env["SIMPLE_HERMES_SESSION_ID"] = session_id
     env.setdefault("PYTHONUNBUFFERED", "1")
     env.setdefault("SIMPLE_HERMES_MAX_STEPS", "300")
-    env.setdefault("SIMPLE_HERMES_BACKEND", "hermes-runtime")
-    env.setdefault("SIMPLE_HERMES_HERMES_ROOT", str(REPO_ROOT.parent / "hermes-agent"))
     return env
 
 

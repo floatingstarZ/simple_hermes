@@ -525,9 +525,27 @@ def _read_input(session: "PromptSession | None") -> str:
     return input(f"{APP_NAME} > ").strip()
 
 
+PROJECT_ROOT_MARKER_FILES = {
+    "pyproject.toml",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "settings.gradle",
+}
+PROJECT_ROOT_MARKER_DIRS = {".git", ".hg"}
+
+
+def _has_project_root_marker(candidate: Path) -> bool:
+    return any((candidate / marker).exists() for marker in PROJECT_ROOT_MARKER_FILES) or any(
+        (candidate / marker).is_dir() for marker in PROJECT_ROOT_MARKER_DIRS
+    )
+
+
 def _find_project_root(start: Path) -> Path | None:
     for candidate in [start, *start.parents]:
-        if (candidate / "pyproject.toml").exists() and (candidate / "simple_hermes").is_dir():
+        if _has_project_root_marker(candidate):
             return candidate
     return None
 
