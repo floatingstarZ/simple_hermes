@@ -31,13 +31,18 @@ INDEX_HTML = r"""<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f7f9;
+      --bg: #f3f5f7;
       --panel: #ffffff;
       --ink: #17202a;
       --muted: #627182;
       --line: #d8dee6;
       --accent: #0f766e;
       --accent-dark: #0b5f59;
+      --accent-soft: #e8f5f3;
+      --violet: #6f5ca8;
+      --violet-soft: #f2eefb;
+      --rose: #b94662;
+      --rose-soft: #fff0f3;
       --warn: #a15c00;
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -56,6 +61,7 @@ INDEX_HTML = r"""<!doctype html>
       padding: 14px 20px;
       border-bottom: 1px solid var(--line);
       background: #ffffff;
+      box-shadow: 0 1px 8px rgba(23, 32, 42, 0.04);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -166,7 +172,7 @@ INDEX_HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 10px;
-      background: #fbfcfd;
+      background: linear-gradient(180deg, #ffffff 0%, #f9fbfc 100%);
       min-height: 64px;
     }
 
@@ -188,11 +194,18 @@ INDEX_HTML = r"""<!doctype html>
       padding: 10px;
       background: #ffffff;
       border: 1px solid var(--line);
+      transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
     }
 
     .call.active {
       border-color: var(--accent);
       box-shadow: inset 3px 0 0 var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .call:hover {
+      border-color: #b8c3cf;
+      box-shadow: 0 3px 12px rgba(23, 32, 42, 0.06);
     }
 
     .call-title {
@@ -249,6 +262,7 @@ INDEX_HTML = r"""<!doctype html>
 
     .tabs button.active {
       border-color: var(--accent);
+      background: var(--accent-soft);
       color: var(--accent-dark);
       font-weight: 700;
     }
@@ -259,6 +273,7 @@ INDEX_HTML = r"""<!doctype html>
       background: var(--panel);
       padding: 14px;
       margin-bottom: 14px;
+      box-shadow: 0 4px 18px rgba(23, 32, 42, 0.05);
     }
 
     .panel h2 {
@@ -293,6 +308,30 @@ INDEX_HTML = r"""<!doctype html>
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 14px;
+    }
+
+    .append-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    .append-card h2 {
+      margin: 0;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    .append-card.incoming h2 { background: var(--violet-soft); color: var(--violet); }
+    .append-card.response h2 { background: var(--accent-soft); color: var(--accent-dark); }
+    .append-card.outgoing h2 { background: var(--rose-soft); color: var(--rose); }
+
+    .append-card pre {
+      border-radius: 0;
+      max-height: none;
+      min-height: 560px;
     }
 
     .empty {
@@ -404,15 +443,15 @@ INDEX_HTML = r"""<!doctype html>
 
         <section class="panel" id="appendPanel" hidden>
           <div class="append-grid">
-            <div>
+            <div class="append-card incoming">
               <h2>Incoming Append</h2>
               <pre id="incomingAppendView"></pre>
             </div>
-            <div>
-              <h2>This Response</h2>
+            <div class="append-card response">
+              <h2>Response Items</h2>
               <pre id="currentResponseView"></pre>
             </div>
-            <div>
+            <div class="append-card outgoing">
               <h2>Outgoing Append</h2>
               <pre id="outgoingAppendView"></pre>
             </div>
@@ -657,9 +696,9 @@ INDEX_HTML = r"""<!doctype html>
         els.jsonView.textContent = formatJson(call.response);
       } else if (state.tab === 'append') {
         const append = call._append_view || { canonical: false, note: 'No append view is available for this call.' };
-        els.incomingAppendView.textContent = truncate(append.incoming_append ?? append.note);
-        els.currentResponseView.textContent = truncate(append.this_response ?? call.response);
-        els.outgoingAppendView.textContent = truncate(append.outgoing_append ?? append.outgoing_note ?? null);
+        els.incomingAppendView.textContent = formatJson(append.incoming_append ?? append.note);
+        els.currentResponseView.textContent = formatJson(append.response_items ?? append.note);
+        els.outgoingAppendView.textContent = formatJson(append.outgoing_append ?? append.outgoing_note ?? null);
       } else if (state.tab === 'events') {
         els.jsonView.textContent = formatJson(call.stream_events || []);
       } else if (state.tab === 'full') {
@@ -995,6 +1034,35 @@ def is_prefix(prefix: Any, full: Any) -> bool:
     return prefix == full[: len(prefix)]
 
 
+def response_items_for_append(response: Any, outgoing_append: Any) -> dict[str, Any]:
+    """Return only response material that is relevant to append-only replay."""
+    if isinstance(outgoing_append, list):
+        response_items = [
+            item
+            for item in outgoing_append
+            if isinstance(item, dict) and item.get("type") != "function_call_output"
+        ]
+        tool_outputs = [
+            item
+            for item in outgoing_append
+            if isinstance(item, dict) and item.get("type") == "function_call_output"
+        ]
+        return {
+            "source": "outgoing_append",
+            "note": "Only model-output items that are appended into the next request are shown here. Tool outputs stay in the Outgoing Append panel.",
+            "response_append_items": response_items,
+            "tool_output_items_excluded": len(tool_outputs),
+        }
+
+    output = response.get("output") if isinstance(response, dict) else None
+    return {
+        "source": "current_response_output",
+        "note": "No next request exists, so outgoing append cannot be observed. Showing current response.output only.",
+        "response_append_items": output if isinstance(output, list) else [],
+        "tool_output_items_excluded": 0,
+    }
+
+
 def build_append_view(calls: list[dict[str, Any]], call: dict[str, Any]) -> dict[str, Any]:
     """Build a turn-local view around Hermes' append-only transcript replay."""
     if call.get("api") != "responses.stream":
@@ -1061,7 +1129,7 @@ def build_append_view(calls: list[dict[str, Any]], call: dict[str, Any]) -> dict
         "incoming_append_items": len(incoming_append) if isinstance(incoming_append, list) else None,
         "outgoing_append_items": len(outgoing_append) if isinstance(outgoing_append, list) else None,
         "incoming_append": incoming_append,
-        "this_response": call.get("response"),
+        "response_items": response_items_for_append(call.get("response"), outgoing_append),
         "outgoing_append": outgoing_append,
         "outgoing_note": outgoing_note,
     }

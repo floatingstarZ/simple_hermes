@@ -58,6 +58,30 @@ The viewer prints the actual localhost URL. It starts at port `8765` and automat
 
 The viewer scans `runs/*/openai_raw_calls.jsonl` plus top-level trace directories such as smoke runs, selects the newest run by default, and opens the newest captured call in that run. Use the run selector and trace list to inspect raw request kwargs, raw responses, stream events, and full JSON records.
 
+## Viewer UI Design
+
+The viewer is designed around two trace-reading modes:
+
+- Raw inspection: `Request`, `Response`, `Stream Events`, and `Full Raw` preserve the SDK-level objects for exact debugging.
+- Append-only inspection: `Append View` shows how Hermes reconstructs each model request from the previous turn.
+
+`Append View` uses three columns:
+
+| Column | Meaning |
+|---|---|
+| Incoming Append | For the first canonical turn, this shows the static prompt envelope: request params, `instructions`, `tools`, and initial user input. For later turns, it shows `current.input[len(previous.input):]`. |
+| Response Items | Shows only model-output items that are relevant to the next request append. It excludes full response metadata and keeps tool outputs out of this column. |
+| Outgoing Append | Shows `next.input[len(current.input):]`, including model-output items plus `function_call_output` items. The final canonical turn has no next request, so outgoing append is not observable. |
+
+The append columns intentionally have no default character truncation. Long tool outputs remain scrollable in-place so the raw append boundary is visible. General request/response preview tabs still use truncation to keep the page responsive.
+
+Visual hierarchy:
+
+- Left sidebar is a run/call navigator with compact metadata.
+- Active calls use a green accent and hover shadow.
+- Append View uses distinct header colors: incoming context, model response items, and outgoing append.
+- Panels use stable dimensions and scrollable code blocks to avoid layout shifts while switching calls.
+
 Summarize a run:
 
 ```bash
