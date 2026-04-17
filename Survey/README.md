@@ -6,6 +6,7 @@
 
 - [自进化 Agent 框架综述](self_evolving_agent_frameworks.md)
 - [Simple Hermes 自进化能力映射](simple_hermes_self_evolution_mapping.md)
+- [Simple Hermes 自进化实验设计](self_evolution_experiment_design.md)
 
 写作原则：
 

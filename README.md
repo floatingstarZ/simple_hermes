@@ -38,6 +38,7 @@ Simple Hermes Codex 是一个面向代码 Agent 实验的轻量项目。它参�
 图和实现细节说明统一放在 `M_docs/`。Excalidraw 源文件和 SVG companion 由 `python3 render_diagrams.py` 批量生成。
 
 - [自进化 Agent Survey](Survey/README.md)
+- [自进化实验设计](Survey/self_evolution_experiment_design.md)
 - [M_docs 总览](M_docs/README.md)
 - [实现细节 Mermaid 图](M_docs/IMPLEMENTATION_DETAILS.md)
 - [改进历史](M_docs/IMPROVEMENT_HISTORY.md)
