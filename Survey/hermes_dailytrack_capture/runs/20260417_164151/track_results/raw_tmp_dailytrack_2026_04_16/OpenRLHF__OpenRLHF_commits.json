@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:48:20.077952+00:00",
+  "data": [
+    {
+      "sha": "76351db1ffe8",
+      "message": "update",
+      "author": "xiaoxigua999",
+      "date": "2026-04-17T06:27:50+00:00",
+      "url": "https://github.com/OpenRLHF/OpenRLHF/commit/76351db1ffe8e12db632a5bf450bbafb3e2031ed"
+    },
+    {
+      "sha": "7201ee298ee5",
+      "message": "update README.md",
+      "author": "xiaoxigua999",
+      "date": "2026-04-17T06:26:22+00:00",
+      "url": "https://github.com/OpenRLHF/OpenRLHF/commit/7201ee298ee54a716b5a3b70854b7561e30ba4de"
+    },
+    {
+      "sha": "ff481ecdc97b",
+      "message": "bump version",
+      "author": "xiaoxigua999",
+      "date": "2026-04-15T03:00:19+00:00",
+      "url": "https://github.com/OpenRLHF/OpenRLHF/commit/ff481ecdc97b861c0cbf07ce49284969a1bd9878"
+    },
+    {
+      "sha": "f97f8f19a20c",
+      "message": "fix: strip orphan image pad tokens on multi-turn VLM overflow fallback",
+      "author": "xiaoxigua999",
+      "date": "2026-04-15T02:53:21+00:00",
+      "url": "https://github.com/OpenRLHF/OpenRLHF/commit/f97f8f19a20cb45e26519243d9c61474a3c18922"
+    },
+    {
+      "sha": "e261d311b9f0",
+      "message": "Fix https://github.com/OpenRLHF/OpenRLHF/issues/1220",
+      "author": "xiaoxigua999",
+      "date": "2026-04-15T02:31:03+00:00",
+      "url": "https://github.com/OpenRLHF/OpenRLHF/commit/e261d311b9f092090d4d4e632f5c709d41a2e38c"
+    }
+  ]
+}

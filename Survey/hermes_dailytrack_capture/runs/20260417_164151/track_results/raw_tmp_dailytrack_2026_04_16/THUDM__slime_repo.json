@@ -1,0 +1,22 @@
+{
+  "command": "repo",
+  "fetched_at": "2026-04-17T08:48:22.103180+00:00",
+  "data": {
+    "full_name": "THUDM/slime",
+    "description": "slime is an LLM post-training framework for RL Scaling.",
+    "stars": 5347,
+    "forks": 729,
+    "watchers": 5347,
+    "open_issues": 283,
+    "language": "Python",
+    "topics": [],
+    "license": "Apache License 2.0",
+    "created_at": "2025-06-18T07:15:54+00:00",
+    "updated_at": "2026-04-17T08:06:41+00:00",
+    "pushed_at": "2026-04-17T05:29:24+00:00",
+    "homepage": "https://thudm.github.io/slime",
+    "url": "https://github.com/THUDM/slime",
+    "default_branch": "main",
+    "archived": false
+  }
+}

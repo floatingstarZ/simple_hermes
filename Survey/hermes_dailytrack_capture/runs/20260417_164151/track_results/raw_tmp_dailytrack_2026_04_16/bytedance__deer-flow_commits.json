@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:52:09.580513+00:00",
+  "data": [
+    {
+      "sha": "898f4e8ac26e",
+      "message": "fix: Memory update system has cache corruption, data loss, and thread-safety bugs (#2251)",
+      "author": "DanielWalnut",
+      "date": "2026-04-17T04:00:31+00:00",
+      "url": "https://github.com/bytedance/deer-flow/commit/898f4e8ac26e44286b1965443fe9fded0ed71b94"
+    },
+    {
+      "sha": "259a6844bf97",
+      "message": "chore(deps): bump python-multipart from 0.0.22 to 0.0.26 in /backend (#2282)",
+      "author": "dependabot[bot]",
+      "date": "2026-04-16T01:07:28+00:00",
+      "url": "https://github.com/bytedance/deer-flow/commit/259a6844bf9773ec2c4b57536a61c96167f040fe"
+    },
+    {
+      "sha": "a664d2f5c4b2",
+      "message": "fix(checkpointer): create parent directory before opening SQLite in sync provider (#2272)",
+      "author": "d 🔹",
+      "date": "2026-04-16T01:06:38+00:00",
+      "url": "https://github.com/bytedance/deer-flow/commit/a664d2f5c4b2cbeb683e67e8bc48e2654d59695e"
+    },
+    {
+      "sha": "105db0098784",
+      "message": "feat: show token usage per assistant response (#2270)",
+      "author": "YuJitang",
+      "date": "2026-04-16T00:56:49+00:00",
+      "url": "https://github.com/bytedance/deer-flow/commit/105db0098784ed3c44158420938052c51b1691f3"
+    },
+    {
+      "sha": "0e16a7fe55a9",
+      "message": "fix(frontend): make Suggestion button opaque in dark mode (#2276)",
+      "author": "Nan Gao",
+      "date": "2026-04-16T00:55:16+00:00",
+      "url": "https://github.com/bytedance/deer-flow/commit/0e16a7fe55a971f2ec69b9289d97f12e3293e5fd"
+    }
+  ]
+}

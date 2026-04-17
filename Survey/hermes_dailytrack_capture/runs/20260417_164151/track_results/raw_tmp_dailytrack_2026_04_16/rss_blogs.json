@@ -1,0 +1,48 @@
+[
+  {
+    "title": "Codex for (almost) everything",
+    "url": "https://openai.com/index/codex-for-almost-everything",
+    "published": "2026-04-16T10:00:00+00:00",
+    "summary": "The updated Codex app for macOS and Windows adds computer use, in-app browsing, image generation, memory, and plugins to accelerate developer workflows.",
+    "tags": [
+      "Product"
+    ],
+    "feed_title": "OpenAI News"
+  },
+  {
+    "title": "Introducing GPT-Rosalind for life sciences research",
+    "url": "https://openai.com/index/introducing-gpt-rosalind",
+    "published": "2026-04-16T01:00:00+00:00",
+    "summary": "OpenAI introduces GPT-Rosalind, a frontier reasoning model built to accelerate drug discovery, genomics analysis, protein reasoning, and scientific research workflows.",
+    "tags": [
+      "Research"
+    ],
+    "feed_title": "OpenAI News"
+  },
+  {
+    "title": "Accelerating the cyber defense ecosystem that protects us all",
+    "url": "https://openai.com/index/accelerating-cyber-defense-ecosystem",
+    "published": "2026-04-16T00:00:00+00:00",
+    "summary": "Leading security firms and enterprises join OpenAI’s Trusted Access for Cyber, using GPT-5.4-Cyber and $10M in API grants to strengthen global cyber defense.",
+    "tags": [
+      "Security"
+    ],
+    "feed_title": "OpenAI News"
+  },
+  {
+    "title": "The PR you would have opened yourself",
+    "url": "https://huggingface.co/blog/transformers-to-mlx",
+    "published": "2026-04-16T00:00:00+00:00",
+    "summary": "",
+    "tags": [],
+    "feed_title": "Hugging Face - Blog"
+  },
+  {
+    "title": "Training and Finetuning Multimodal Embedding & Reranker Models with Sentence Transformers",
+    "url": "https://huggingface.co/blog/train-multimodal-sentence-transformers",
+    "published": "2026-04-16T00:00:00+00:00",
+    "summary": "",
+    "tags": [],
+    "feed_title": "Hugging Face - Blog"
+  }
+]

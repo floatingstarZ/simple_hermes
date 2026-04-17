@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:58:17.693325+00:00",
+  "data": [
+    {
+      "sha": "0f662b55d5a9",
+      "message": "Release: Merge staging to main",
+      "author": "Judgment Release Bot",
+      "date": "2026-04-09T04:36:42+00:00",
+      "url": "https://github.com/JudgmentLabs/judgeval/commit/0f662b55d5a94b92aff7f808d8e59f49650f3692"
+    },
+    {
+      "sha": "7376292b4b79",
+      "message": "JUD-4538: Judgment Trace (#734)",
+      "author": "Alan Zhang",
+      "date": "2026-04-08T00:56:19+00:00",
+      "url": "https://github.com/JudgmentLabs/judgeval/commit/7376292b4b79127c95564a8f3b2f62eede7ce04d"
+    },
+    {
+      "sha": "b4e774e1c328",
+      "message": "Remove Agent Reinforcement Learning section from README (#719)",
+      "author": "Joseph S Camyre",
+      "date": "2026-04-06T22:14:50+00:00",
+      "url": "https://github.com/JudgmentLabs/judgeval/commit/b4e774e1c328d705e38b43a6feac39aa79c02682"
+    },
+    {
+      "sha": "76fc862ec7ca",
+      "message": "Release: Merge staging to main",
+      "author": "Judgment Release Bot",
+      "date": "2026-04-04T01:29:37+00:00",
+      "url": "https://github.com/JudgmentLabs/judgeval/commit/76fc862ec7ca4fe2b479745a8f144de34905bc69"
+    },
+    {
+      "sha": "eed12efa7b3a",
+      "message": "fix: claude agent sdk wrapper (#732)",
+      "author": "Abhishek Govindarasu",
+      "date": "2026-04-04T00:09:01+00:00",
+      "url": "https://github.com/JudgmentLabs/judgeval/commit/eed12efa7b3a4b34dcb4389037b0409fc6341e66"
+    }
+  ]
+}

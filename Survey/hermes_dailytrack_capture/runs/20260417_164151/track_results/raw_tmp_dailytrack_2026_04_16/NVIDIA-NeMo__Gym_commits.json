@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:50:51.374720+00:00",
+  "data": [
+    {
+      "sha": "e20b27726368",
+      "message": "fix: remove mini-swe dummy resources server (#1077)",
+      "author": "Christian Munley",
+      "date": "2026-04-17T07:49:50+00:00",
+      "url": "https://github.com/NVIDIA-NeMo/Gym/commit/e20b27726368b3cd31b6f0bd9634bfaea6be2674"
+    },
+    {
+      "sha": "929089881976",
+      "message": "RL Environment for Indirect Prompt Injection (#1051)",
+      "author": "makeshn",
+      "date": "2026-04-17T04:55:24+00:00",
+      "url": "https://github.com/NVIDIA-NeMo/Gym/commit/929089881976d1d2f96a52e1ddcd479643a3d7ef"
+    },
+    {
+      "sha": "6d7c35e02ce3",
+      "message": "Update jailbreak env: response policy based verification (#1059)",
+      "author": "Prasoon Varshney",
+      "date": "2026-04-17T04:55:06+00:00",
+      "url": "https://github.com/NVIDIA-NeMo/Gym/commit/6d7c35e02ce37e99be944884d3b55a4f103c3c46"
+    },
+    {
+      "sha": "8194d109d69b",
+      "message": "Competitive Coding Challenges Gym Environment (#994)",
+      "author": "Aleksander Ficek",
+      "date": "2026-04-16T22:21:40+00:00",
+      "url": "https://github.com/NVIDIA-NeMo/Gym/commit/8194d109d69beb7dfa05cb5d71d743e0509bcda0"
+    },
+    {
+      "sha": "409e6bd3b306",
+      "message": "terminal pivot multi harness (#1036)",
+      "author": "Jialei Wang",
+      "date": "2026-04-16T21:57:12+00:00",
+      "url": "https://github.com/NVIDIA-NeMo/Gym/commit/409e6bd3b3064dda4e810717558c7687f6478b67"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:50:56.280032+00:00",
+  "data": [
+    {
+      "sha": "228791fb499a",
+      "message": "Merge pull request #342 from kaizen-38/feat/bug-fix",
+      "author": "Andrej",
+      "date": "2026-03-26T00:07:37+00:00",
+      "url": "https://github.com/karpathy/autoresearch/commit/228791fb499afffb54b46200aca536f79142f117"
+    },
+    {
+      "sha": "e6d79c123441",
+      "message": "Enhance README with more project context and links",
+      "author": "Andrej",
+      "date": "2026-03-21T02:13:39+00:00",
+      "url": "https://github.com/karpathy/autoresearch/commit/e6d79c123441a53d91bb8df7adf4db45cf120bf1"
+    },
+    {
+      "sha": "f32ab047a298",
+      "message": "fix(analysis): define best_bpb before y-axis scaling",
+      "author": "kaizen-38",
+      "date": "2026-03-19T16:43:33+00:00",
+      "url": "https://github.com/karpathy/autoresearch/commit/f32ab047a298737d459ac9ded1bc2fc399505159"
+    },
+    {
+      "sha": "32a1460f626e",
+      "message": "Merge pull request #301 from indianspeedster/master",
+      "author": "Andrej",
+      "date": "2026-03-16T18:43:26+00:00",
+      "url": "https://github.com/karpathy/autoresearch/commit/32a1460f626e28479d427c033ee485bf5f86875a"
+    },
+    {
+      "sha": "513fe6fceef9",
+      "message": "add AMD ROCm fork to notable forks section",
+      "author": "indianspeedster",
+      "date": "2026-03-16T18:28:48+00:00",
+      "url": "https://github.com/karpathy/autoresearch/commit/513fe6fceef9b37b6c24c8dc0f1050dee451c1ff"
+    }
+  ]
+}

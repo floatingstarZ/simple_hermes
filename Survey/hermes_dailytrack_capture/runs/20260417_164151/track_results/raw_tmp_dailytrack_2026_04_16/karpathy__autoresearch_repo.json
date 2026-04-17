@@ -1,0 +1,22 @@
+{
+  "command": "repo",
+  "fetched_at": "2026-04-17T08:50:53.461859+00:00",
+  "data": {
+    "full_name": "karpathy/autoresearch",
+    "description": "AI agents running research on single-GPU nanochat training automatically",
+    "stars": 73612,
+    "forks": 10718,
+    "watchers": 73612,
+    "open_issues": 182,
+    "language": "Python",
+    "topics": [],
+    "license": null,
+    "created_at": "2026-03-06T22:00:43+00:00",
+    "updated_at": "2026-04-17T08:46:49+00:00",
+    "pushed_at": "2026-03-26T00:07:37+00:00",
+    "homepage": null,
+    "url": "https://github.com/karpathy/autoresearch",
+    "default_branch": "master",
+    "archived": false
+  }
+}

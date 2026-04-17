@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:46:13.020620+00:00",
+  "data": [
+    {
+      "sha": "f512e11c0a66",
+      "message": "[rollout] fix: RM sleep/wake teacher replicas (#6041)",
+      "author": "Jacob Helwig",
+      "date": "2026-04-17T05:44:48+00:00",
+      "url": "https://github.com/verl-project/verl/commit/f512e11c0a66be04739e463725eb58a3363fe3aa"
+    },
+    {
+      "sha": "0c0c4121175a",
+      "message": "[trainer, rollout, algo] refactor: Remove OPD colocate mode (#6039)",
+      "author": "Jacob Helwig",
+      "date": "2026-04-17T05:12:32+00:00",
+      "url": "https://github.com/verl-project/verl/commit/0c0c4121175aa59bb94583ae743394765a08a9c3"
+    },
+    {
+      "sha": "4b5a9a900155",
+      "message": "[5/n][trainer] feat: flowgrpo trainer (#5951)",
+      "author": "Cheung Ka Wai",
+      "date": "2026-04-17T04:11:28+00:00",
+      "url": "https://github.com/verl-project/verl/commit/4b5a9a900155eb2e91fac8c3e503e87e387e9e96"
+    },
+    {
+      "sha": "dea887c96f36",
+      "message": "[trainer] fix: add missing rollout dump and corrected validation logging in main_ppo_sync (#6024)",
+      "author": "guillemgt",
+      "date": "2026-04-17T03:12:07+00:00",
+      "url": "https://github.com/verl-project/verl/commit/dea887c96f362ef72c1572e21bd03c0d492923af"
+    },
+    {
+      "sha": "0588bb60f138",
+      "message": "[trainer,algo] feat: Support On-Policy Distillation in `main_ppo_sync` (#5997)",
+      "author": "Han Zhenyu 韩振宇",
+      "date": "2026-04-17T03:10:43+00:00",
+      "url": "https://github.com/verl-project/verl/commit/0588bb60f1388ae133f29a1cdcb9aaf0699301f8"
+    }
+  ]
+}

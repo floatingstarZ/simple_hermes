@@ -1,0 +1,28 @@
+{
+  "command": "repo",
+  "fetched_at": "2026-04-17T08:50:58.254249+00:00",
+  "data": {
+    "full_name": "microsoft/agent-lightning",
+    "description": "The absolute trainer to light up AI agents.",
+    "stars": 16911,
+    "forks": 1474,
+    "watchers": 16911,
+    "open_issues": 153,
+    "language": "Python",
+    "topics": [
+      "agent",
+      "agentic-ai",
+      "llm",
+      "mlops",
+      "reinforcement-learning"
+    ],
+    "license": "MIT License",
+    "created_at": "2025-06-18T07:28:45+00:00",
+    "updated_at": "2026-04-17T07:15:28+00:00",
+    "pushed_at": "2026-04-03T00:29:26+00:00",
+    "homepage": "https://microsoft.github.io/agent-lightning/",
+    "url": "https://github.com/microsoft/agent-lightning",
+    "default_branch": "main",
+    "archived": false
+  }
+}

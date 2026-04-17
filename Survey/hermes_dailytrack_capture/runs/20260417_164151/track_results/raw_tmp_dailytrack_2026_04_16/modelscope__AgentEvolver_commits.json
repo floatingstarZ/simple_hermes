@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:52:37.406708+00:00",
+  "data": [
+    {
+      "sha": "a5a8db8689d6",
+      "message": "Merge pull request #42 from modelscope/docs/seeupo-readme-news",
+      "author": "Yunpeng Zhai",
+      "date": "2026-03-28T04:58:20+00:00",
+      "url": "https://github.com/modelscope/AgentEvolver/commit/a5a8db8689d6493b028107dcb4c27415441581dc"
+    },
+    {
+      "sha": "662d3a0fb15c",
+      "message": "docs: add SeeUPO branch news to README",
+      "author": "Harry67Hu",
+      "date": "2026-03-27T14:38:39+00:00",
+      "url": "https://github.com/modelscope/AgentEvolver/commit/662d3a0fb15cb43893226885492eb6ec40b46f40"
+    },
+    {
+      "sha": "a05409bd7319",
+      "message": "Merge pull request #35 from Xinji-Mai/dev/xinji_1229",
+      "author": "Yunpeng Zhai",
+      "date": "2026-01-30T09:08:31+00:00",
+      "url": "https://github.com/modelscope/AgentEvolver/commit/a05409bd73196adcc63197d38bd1fd3af0f16d6c"
+    },
+    {
+      "sha": "af0796050d00",
+      "message": "feat:online observer",
+      "author": "maixinji",
+      "date": "2026-01-30T06:55:47+00:00",
+      "url": "https://github.com/modelscope/AgentEvolver/commit/af0796050d0086eb0069d529c7c59189df280599"
+    },
+    {
+      "sha": "55e93655d8d3",
+      "message": "feat:cachedSummaryMemory cacheRetrievalAgent",
+      "author": "maixinji",
+      "date": "2026-01-29T07:44:06+00:00",
+      "url": "https://github.com/modelscope/AgentEvolver/commit/55e93655d8d37497703250ade15a60eca0dba192"
+    }
+  ]
+}

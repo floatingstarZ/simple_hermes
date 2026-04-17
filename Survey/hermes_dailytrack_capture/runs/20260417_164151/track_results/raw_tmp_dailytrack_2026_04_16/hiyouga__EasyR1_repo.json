@@ -1,0 +1,31 @@
+{
+  "command": "repo",
+  "fetched_at": "2026-04-17T08:49:14.896406+00:00",
+  "data": {
+    "full_name": "hiyouga/EasyR1",
+    "description": "EasyR1: An Efficient, Scalable, Multi-Modality RL Training Framework based on veRL",
+    "stars": 4860,
+    "forks": 365,
+    "watchers": 4860,
+    "open_issues": 51,
+    "language": "Python",
+    "topics": [
+      "ai",
+      "gpt",
+      "llm",
+      "nlp",
+      "reinforcement-learning",
+      "rl",
+      "deepseek",
+      "qwen"
+    ],
+    "license": "Apache License 2.0",
+    "created_at": "2025-02-22T04:17:31+00:00",
+    "updated_at": "2026-04-17T02:48:54+00:00",
+    "pushed_at": "2026-04-06T09:05:50+00:00",
+    "homepage": "https://verl.readthedocs.io",
+    "url": "https://github.com/hiyouga/EasyR1",
+    "default_branch": "main",
+    "archived": false
+  }
+}

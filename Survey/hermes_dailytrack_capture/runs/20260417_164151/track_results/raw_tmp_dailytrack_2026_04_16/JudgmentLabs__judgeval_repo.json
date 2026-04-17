@@ -1,0 +1,38 @@
+{
+  "command": "repo",
+  "fetched_at": "2026-04-17T08:57:22.155053+00:00",
+  "data": {
+    "full_name": "JudgmentLabs/judgeval",
+    "description": "The open source post-building layer for agents. Our environment data and evals power agent post-training (RL, SFT) and monitoring.",
+    "stars": 1020,
+    "forks": 90,
+    "watchers": 1020,
+    "open_issues": 17,
+    "language": "Python",
+    "topics": [
+      "langchain",
+      "langgraph",
+      "llama-index",
+      "llm",
+      "llm-evaluation",
+      "llm-observability",
+      "open-source",
+      "openai",
+      "prompt-engineering",
+      "agent",
+      "agentic-ai",
+      "agents",
+      "grpo",
+      "reinforcement-learning",
+      "rl"
+    ],
+    "license": "Apache License 2.0",
+    "created_at": "2024-10-25T04:49:15+00:00",
+    "updated_at": "2026-04-14T20:29:53+00:00",
+    "pushed_at": "2026-04-13T00:48:30+00:00",
+    "homepage": "https://judgmentlabs.ai/",
+    "url": "https://github.com/JudgmentLabs/judgeval",
+    "default_branch": "main",
+    "archived": false
+  }
+}

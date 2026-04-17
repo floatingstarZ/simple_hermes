@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:49:12.948500+00:00",
+  "data": [
+    {
+      "sha": "8efb1166c8e4",
+      "message": "[fix] eval sample logging when sample is a list (#1836)",
+      "author": "Mathew Han",
+      "date": "2026-04-16T03:14:52+00:00",
+      "url": "https://github.com/THUDM/slime/commit/8efb1166c8e4bb4c810059b0161cbd06bcfbb6cf"
+    },
+    {
+      "sha": "d649cfd5f9bf",
+      "message": "Bugfix: use cpu instead of cuda in convert_torch_dist_to_hf.py when --add-missing-from-origin-hf is set (#1828)",
+      "author": "Chenhe",
+      "date": "2026-04-15T06:36:59+00:00",
+      "url": "https://github.com/THUDM/slime/commit/d649cfd5f9bf8b09fe6771905ab43cdd001aa296"
+    },
+    {
+      "sha": "08ed3420f9a3",
+      "message": "docs: add Relax to notable projects in README (#1834)",
+      "author": "杨睿",
+      "date": "2026-04-15T05:48:03+00:00",
+      "url": "https://github.com/THUDM/slime/commit/08ed3420f9a30b8f89d4b6d01c59ce119d89a472"
+    },
+    {
+      "sha": "286750aa3ef4",
+      "message": "Add fallback for get_seqlen_balanced_partitions (#1823)",
+      "author": "Zilin Zhu",
+      "date": "2026-04-09T12:29:10+00:00",
+      "url": "https://github.com/THUDM/slime/commit/286750aa3ef4d298995ce76e3b1cf1349efe3788"
+    },
+    {
+      "sha": "2928bba9da6e",
+      "message": "Revert no_grad for entropy to prevent comm stuck in dsa (#1822)",
+      "author": "Zilin Zhu",
+      "date": "2026-04-09T11:20:28+00:00",
+      "url": "https://github.com/THUDM/slime/commit/2928bba9da6e983472eedf8b0be8c5a0f6a83d8a"
+    }
+  ]
+}

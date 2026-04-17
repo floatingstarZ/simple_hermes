@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:47:36.941356+00:00",
+  "data": [
+    {
+      "sha": "21cf71dfa8f4",
+      "message": "Remove dead token attributes from experimental trainers (#5565)",
+      "author": "Albert Villanova del Moral",
+      "date": "2026-04-17T05:02:24+00:00",
+      "url": "https://github.com/huggingface/trl/commit/21cf71dfa8f4ac238f469cd52dcddc287c3c5e22"
+    },
+    {
+      "sha": "6d05f86b6fdd",
+      "message": "Support processor in maybe_apply_chat_template (#5567)",
+      "author": "Albert Villanova del Moral",
+      "date": "2026-04-17T05:01:53+00:00",
+      "url": "https://github.com/huggingface/trl/commit/6d05f86b6fdd62c570728797294ec3683d707fd0"
+    },
+    {
+      "sha": "6632cda5e41b",
+      "message": "⬆️ Bump dev version (#5577)",
+      "author": "Quentin Gallouédec",
+      "date": "2026-04-17T01:05:21+00:00",
+      "url": "https://github.com/huggingface/trl/commit/6632cda5e41bca3d506aba357477f9a77fbd0552"
+    },
+    {
+      "sha": "aca45154c8b6",
+      "message": "Release: v1.2 (#5576)",
+      "author": "Quentin Gallouédec",
+      "date": "2026-04-17T01:03:52+00:00",
+      "url": "https://github.com/huggingface/trl/commit/aca45154c8b6b1d9b0c06b674c0fa6bcfd9df051"
+    },
+    {
+      "sha": "abe20a8c5eda",
+      "message": "Add LLaMA 3.1 and 3.2 tool calling support (#5518)",
+      "author": "Quentin Gallouédec",
+      "date": "2026-04-16T17:21:13+00:00",
+      "url": "https://github.com/huggingface/trl/commit/abe20a8c5edaa0e01c515092281c1b23c07a202c"
+    }
+  ]
+}

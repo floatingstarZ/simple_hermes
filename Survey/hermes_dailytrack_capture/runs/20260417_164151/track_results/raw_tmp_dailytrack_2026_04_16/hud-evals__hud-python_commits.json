@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:54:01.705211+00:00",
+  "data": [
+    {
+      "sha": "3d83465bfa27",
+      "message": "fx",
+      "author": "lorenss-m",
+      "date": "2026-04-16T22:15:25+00:00",
+      "url": "https://github.com/hud-evals/hud-python/commit/3d83465bfa27b35032b9d9c68c94cc206f310af7"
+    },
+    {
+      "sha": "cbd3d70b9d42",
+      "message": "fx",
+      "author": "lorenss-m",
+      "date": "2026-04-16T22:14:24+00:00",
+      "url": "https://github.com/hud-evals/hud-python/commit/cbd3d70b9d42ac9d16bd2af70f7d2b8e6f91af0a"
+    },
+    {
+      "sha": "1fe556e30ad8",
+      "message": "version bump",
+      "author": "lorenss-m",
+      "date": "2026-04-16T22:14:17+00:00",
+      "url": "https://github.com/hud-evals/hud-python/commit/1fe556e30ad8e7e4c2ff62a186d3959874f7b725"
+    },
+    {
+      "sha": "999e2992bc7a",
+      "message": "Add hud login command (#393)",
+      "author": "Farrel Mahaztra",
+      "date": "2026-04-16T22:11:56+00:00",
+      "url": "https://github.com/hud-evals/hud-python/commit/999e2992bc7a65919fe88fef9ea21f893a4a3919"
+    },
+    {
+      "sha": "c8dfa29d3e61",
+      "message": "L/docs updates agent (#396)",
+      "author": "lorenss",
+      "date": "2026-04-16T22:11:42+00:00",
+      "url": "https://github.com/hud-evals/hud-python/commit/c8dfa29d3e61c31b1cf7f16ec772bb0ce130dd4b"
+    }
+  ]
+}

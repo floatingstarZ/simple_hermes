@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:50:32.618916+00:00",
+  "data": [
+    {
+      "sha": "f53f64403c9b",
+      "message": "fix: restore FSDP actor offload state (#1033)",
+      "author": "Yiyu Pan",
+      "date": "2026-04-16T15:08:04+00:00",
+      "url": "https://github.com/RLinf/RLinf/commit/f53f64403c9bfedcda99eb7b776ae6381b4bf4d8"
+    },
+    {
+      "sha": "ad370e638b81",
+      "message": "feat(embodiment): d4rl offline iql with fsdp strategy (#791)",
+      "author": "Dps799",
+      "date": "2026-04-16T10:02:56+00:00",
+      "url": "https://github.com/RLinf/RLinf/commit/ad370e638b811f481228f38b931d7bb7dd742252"
+    },
+    {
+      "sha": "5714022c766f",
+      "message": "feat: support custom model registration (#920)",
+      "author": "guozhen",
+      "date": "2026-04-15T13:01:51+00:00",
+      "url": "https://github.com/RLinf/RLinf/commit/5714022c766f0ef90273e06e64449fcaf89e03a3"
+    },
+    {
+      "sha": "3e36d8c30043",
+      "message": "feat(embodichain): integrate cartpole into rlinf (#979)",
+      "author": "Chen Yang",
+      "date": "2026-04-15T08:16:36+00:00",
+      "url": "https://github.com/RLinf/RLinf/commit/3e36d8c3004338b2d7928101bf5c1cdbed30df0b"
+    },
+    {
+      "sha": "64bf29a30a59",
+      "message": "feat: update the lerobot writer (#1036)",
+      "author": "Hongzhi Zang",
+      "date": "2026-04-15T04:08:07+00:00",
+      "url": "https://github.com/RLinf/RLinf/commit/64bf29a30a5920b83b3e9633c35013d9abeea2e0"
+    }
+  ]
+}

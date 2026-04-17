@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:51:08.675085+00:00",
+  "data": [
+    {
+      "sha": "c746af2f76be",
+      "message": "vercel ai webshop example (#440)",
+      "author": "Leonardo Pinheiro",
+      "date": "2026-02-11T14:20:42+00:00",
+      "url": "https://github.com/microsoft/agent-lightning/commit/c746af2f76bebcae56007a59c223cdace411c89b"
+    },
+    {
+      "sha": "49bf9cd9ecd9",
+      "message": "[Contrib] Agent-OS Integration: Kernel-Level Safety for RL Training (#478)",
+      "author": "Imran Siddique",
+      "date": "2026-02-11T01:00:36+00:00",
+      "url": "https://github.com/microsoft/agent-lightning/commit/49bf9cd9ecd94f0310d6a1a62b31ce41b9092018"
+    },
+    {
+      "sha": "9864b8fbffe6",
+      "message": "New example: AGL Simulation (#367)",
+      "author": "Jeonghye Kim",
+      "date": "2026-02-10T04:00:12+00:00",
+      "url": "https://github.com/microsoft/agent-lightning/commit/9864b8fbffe632f5e6cc4b68b0c75f9c0db4b281"
+    },
+    {
+      "sha": "82d8535048c4",
+      "message": "CI maintenance (Feb) (#479)",
+      "author": "Yuge Zhang",
+      "date": "2026-02-09T07:59:02+00:00",
+      "url": "https://github.com/microsoft/agent-lightning/commit/82d8535048c41271a0db77a5aeeb596206b3835f"
+    },
+    {
+      "sha": "5fa65824919f",
+      "message": "Validate input length in generate_id utility (#460)",
+      "author": "Dunura Saradha Witharama",
+      "date": "2026-02-09T06:39:50+00:00",
+      "url": "https://github.com/microsoft/agent-lightning/commit/5fa65824919f08da939f39288462e7980a6ca788"
+    }
+  ]
+}

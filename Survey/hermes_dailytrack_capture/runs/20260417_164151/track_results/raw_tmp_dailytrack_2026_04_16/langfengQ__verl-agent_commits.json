@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:50:12.835655+00:00",
+  "data": [
+    {
+      "sha": "796ed310287f",
+      "message": "Update HGPO readme (#233)",
+      "author": "Shuo He",
+      "date": "2026-02-27T05:29:25+00:00",
+      "url": "https://github.com/langfengQ/verl-agent/commit/796ed310287fa605c9292a0fce07a86d79fde05e"
+    },
+    {
+      "sha": "b4918ccb69a1",
+      "message": "Add recipe/hgpo (HGPO trainer, configs and run scripts) (#232)",
+      "author": "Shuo He",
+      "date": "2026-02-26T09:29:48+00:00",
+      "url": "https://github.com/langfengQ/verl-agent/commit/b4918ccb69a1f9c9d6857419b60952999d18f458"
+    },
+    {
+      "sha": "2716b30b930f",
+      "message": "Update README (#226)",
+      "author": "Lang Feng",
+      "date": "2026-02-11T08:43:12+00:00",
+      "url": "https://github.com/langfengQ/verl-agent/commit/2716b30b930f4fbddb01798ffcd20e707287680a"
+    },
+    {
+      "sha": "11b8fbdb6c60",
+      "message": "update readme (#225)",
+      "author": "Yulei Qin",
+      "date": "2026-01-30T14:35:47+00:00",
+      "url": "https://github.com/langfengQ/verl-agent/commit/11b8fbdb6c60e2a77f156b5e997c26cebbb13ac4"
+    },
+    {
+      "sha": "373e6b221cd8",
+      "message": "add Qwen3-VL (#196)",
+      "author": "Fabian Schuetze",
+      "date": "2025-12-11T11:44:55+00:00",
+      "url": "https://github.com/langfengQ/verl-agent/commit/373e6b221cd88db45a1d303da5dd7871630efe09"
+    }
+  ]
+}

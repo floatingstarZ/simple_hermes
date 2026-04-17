@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:49:22.768524+00:00",
+  "data": [
+    {
+      "sha": "dd71bbd25269",
+      "message": "Update issue templates (#10956)",
+      "author": "Yaowei Zheng",
+      "date": "2026-04-06T09:05:48+00:00",
+      "url": "https://github.com/hiyouga/EasyR1/commit/dd71bbd252694f5f850213eec15795b6b88d9fea"
+    },
+    {
+      "sha": "3f527bd266f9",
+      "message": "fix lora weight merge for vllm (for fixing issue #659) (#668)",
+      "author": "Gong Zheng",
+      "date": "2026-03-26T10:30:57+00:00",
+      "url": "https://github.com/hiyouga/EasyR1/commit/3f527bd266f964f33c6cd6ec83ac85a6a9e5bf37"
+    },
+    {
+      "sha": "6842bb21a5d1",
+      "message": "[rollout] fix Qwen3-VL video metadata handling in vLLM (#662)",
+      "author": "rank-Yu",
+      "date": "2026-03-10T02:58:24+00:00",
+      "url": "https://github.com/hiyouga/EasyR1/commit/6842bb21a5d164aa61fdc7e3a00079a2a40ad9ef"
+    },
+    {
+      "sha": "a354cdcbec24",
+      "message": "[deps] Allow transformers <5.0.0 for Qwen3-VL (#663)",
+      "author": "rank-Yu",
+      "date": "2026-03-10T02:48:32+00:00",
+      "url": "https://github.com/hiyouga/EasyR1/commit/a354cdcbec2446bb8ab6606a592fd86d94de2461"
+    },
+    {
+      "sha": "f8708f0a32d1",
+      "message": "[ci] Migrate to uv and slash CI time by 55% (#664)",
+      "author": "Bashar Hasan",
+      "date": "2026-03-10T02:43:24+00:00",
+      "url": "https://github.com/hiyouga/EasyR1/commit/f8708f0a32d1ad28f4facf55dc51160d8ca43c85"
+    }
+  ]
+}

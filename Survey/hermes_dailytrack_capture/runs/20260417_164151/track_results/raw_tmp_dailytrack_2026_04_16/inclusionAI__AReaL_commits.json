@@ -1,0 +1,41 @@
+{
+  "command": "commits",
+  "fetched_at": "2026-04-17T08:49:52.552939+00:00",
+  "data": [
+    {
+      "sha": "e55311993c58",
+      "message": "feat(engine): lora support for MoE models (single node/ cross node) (#1159)",
+      "author": "Gursimran",
+      "date": "2026-04-17T07:45:09+00:00",
+      "url": "https://github.com/inclusionAI/AReaL/commit/e55311993c58eab98642096e1bd89eca598006fc"
+    },
+    {
+      "sha": "d4891785e431",
+      "message": "chore: move figures into assets/figures/ and add community meeting folder (#1192)",
+      "author": "Wei Fu",
+      "date": "2026-04-16T12:25:33+00:00",
+      "url": "https://github.com/inclusionAI/AReaL/commit/d4891785e431dd83037058dc11f1320ee9e36397"
+    },
+    {
+      "sha": "073adbf24132",
+      "message": "fix: FSDP initialization for set-valued wrap class names (#1187)",
+      "author": "xiao",
+      "date": "2026-04-16T12:05:02+00:00",
+      "url": "https://github.com/inclusionAI/AReaL/commit/073adbf241328101b4ea6c71cf7fd7f0571be97a"
+    },
+    {
+      "sha": "376ecbb81aec",
+      "message": "chore: dump v1.0.3 (#1191)",
+      "author": "Wei Fu",
+      "date": "2026-04-16T11:59:18+00:00",
+      "url": "https://github.com/inclusionAI/AReaL/commit/376ecbb81aec8e08f91157c29d9378beb51e6903"
+    },
+    {
+      "sha": "4eb423c6b37f",
+      "message": "ci: parallelize unit and integration tests across 4 GPU instances (#1185)",
+      "author": "nuzant",
+      "date": "2026-04-16T07:13:13+00:00",
+      "url": "https://github.com/inclusionAI/AReaL/commit/4eb423c6b37f8088c990d1660fdfec33a0eae8db"
+    }
+  ]
+}

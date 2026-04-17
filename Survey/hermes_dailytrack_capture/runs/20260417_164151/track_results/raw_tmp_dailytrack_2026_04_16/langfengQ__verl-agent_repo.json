@@ -1,0 +1,31 @@
+{
+  "command": "repo",
+  "fetched_at": "2026-04-17T08:49:54.967226+00:00",
+  "data": {
+    "full_name": "langfengQ/verl-agent",
+    "description": "verl-agent is an extension of veRL, designed for training LLM/VLM agents via RL. verl-agent is also the official code for paper \"Group-in-Group Policy Optimization for LLM Agent Training\"",
+    "stars": 1806,
+    "forks": 173,
+    "watchers": 1806,
+    "open_issues": 61,
+    "language": "Python",
+    "topics": [
+      "llm-agents",
+      "llm-training",
+      "reinforcement-learning",
+      "large-language-models",
+      "deepseek-r1",
+      "grpo",
+      "agent-framework",
+      "gigpo"
+    ],
+    "license": "Apache License 2.0",
+    "created_at": "2025-03-23T13:18:13+00:00",
+    "updated_at": "2026-04-17T07:41:08+00:00",
+    "pushed_at": "2026-02-27T05:29:25+00:00",
+    "homepage": "https://huggingface.co/papers/2505.10978",
+    "url": "https://github.com/langfengQ/verl-agent",
+    "default_branch": "master",
+    "archived": false
+  }
+}
