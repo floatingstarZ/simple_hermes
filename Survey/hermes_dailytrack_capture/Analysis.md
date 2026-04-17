@@ -426,6 +426,28 @@ The Full Prompt Appendix below contains the exact raw `instructions` block. In p
 
 After each turn, Hermes appends model output items and tool outputs back into the next request. It does not use `previous_response_id`; every canonical request is self-contained.
 
+I verified this mechanically across all 45 canonical `responses.stream` turns:
+
+```text
+instructions same across canonical turns: true
+tools same across canonical turns: true
+model/store/reasoning/include/tool_choice/parallel_tool_calls/prompt_cache_key same: true
+input prefix append-only for every adjacent canonical turn: true
+first mismatch: none
+```
+
+So the trace can be modeled as:
+
+```text
+request_1.input = [user_task]
+request_2.input = request_1.input + append_1
+request_3.input = request_2.input + append_2
+...
+request_n.input = request_(n-1).input + append_(n-1)
+```
+
+Where each `append_i` is the model output and tool execution material produced after request `i`, as observed in request `i+1`. In other words, Hermes performs client-side transcript replay: static prompt fields stay constant, and `input` grows by prefix-preserving append.
+
 Representative progression:
 
 | Canonical call | Input items | Input item mix | Input tokens | Cached input tokens | Model function calls emitted |
@@ -437,6 +459,26 @@ Representative progression:
 | 89 | 249 | `user=1`, `reasoning=44`, `assistant=44`, `function_call=80`, `function_call_output=80` | 159,581 | 124,544 | `todo` |
 
 This is the main reason later calls are huge. The LLM sees not just "what happened", but raw tool outputs, command strings, JSON snippets, file contents, diffs, and verification results.
+
+### Append-Only Visualization Model
+
+Because `input` is prefix-preserving, the clearest turn visualization is not "show the whole request every time". It is a three-panel delta view:
+
+| Panel | First canonical call | Later canonical calls |
+|---|---|---|
+| Incoming Append | Static prompt envelope: `instructions`, `tools`, request parameters, initial user input | `current.input[len(previous.input):]`, meaning the material appended after the previous request |
+| This Response | Current canonical `response` | Current canonical `response` |
+| Outgoing Append | `next.input[len(current.input):]`, if a next request exists | `next.input[len(current.input):]`, if a next request exists |
+
+This is now implemented in `visualize_traces.py` as the `Append View` tab. It is intentionally defined over canonical `responses.stream` calls only. For a selected stream call:
+
+```python
+incoming_append = current.input[len(previous.input):]
+this_response = current.response
+outgoing_append = next.input[len(current.input):]
+```
+
+For the first call, there is no `previous.input`, so `incoming_append` is replaced with the static system prompt envelope. For the final call, there is no `next.input`, so `outgoing_append` cannot be observed; this is another way to see why the final turn's post-tool append is absent when the run stops at the turn cap.
 
 ### Tool Schema Layer
 

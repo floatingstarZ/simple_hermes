@@ -289,6 +289,12 @@ INDEX_HTML = r"""<!doctype html>
       gap: 14px;
     }
 
+    .append-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
     .empty {
       padding: 32px;
       text-align: center;
@@ -319,6 +325,7 @@ INDEX_HTML = r"""<!doctype html>
       aside { max-height: none; border-right: none; border-bottom: 1px solid var(--line); }
       main { max-height: none; }
       .grid { grid-template-columns: 1fr; }
+      .append-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -374,6 +381,7 @@ INDEX_HTML = r"""<!doctype html>
               <button data-tab="summary" class="active">Summary</button>
               <button data-tab="request">Request</button>
               <button data-tab="response">Response</button>
+              <button data-tab="append">Append View</button>
               <button data-tab="events">Stream Events</button>
               <button data-tab="full">Full Raw</button>
             </div>
@@ -390,6 +398,23 @@ INDEX_HTML = r"""<!doctype html>
             <div>
               <h2>Response</h2>
               <pre id="responsePreview"></pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="appendPanel" hidden>
+          <div class="append-grid">
+            <div>
+              <h2>Incoming Append</h2>
+              <pre id="incomingAppendView"></pre>
+            </div>
+            <div>
+              <h2>This Response</h2>
+              <pre id="currentResponseView"></pre>
+            </div>
+            <div>
+              <h2>Outgoing Append</h2>
+              <pre id="outgoingAppendView"></pre>
             </div>
           </div>
         </section>
@@ -429,9 +454,13 @@ INDEX_HTML = r"""<!doctype html>
       detailMeta: document.getElementById('detailMeta'),
       fileLinks: document.getElementById('fileLinks'),
       summaryPanel: document.getElementById('summaryPanel'),
+      appendPanel: document.getElementById('appendPanel'),
       jsonPanel: document.getElementById('jsonPanel'),
       requestPreview: document.getElementById('requestPreview'),
       responsePreview: document.getElementById('responsePreview'),
+      incomingAppendView: document.getElementById('incomingAppendView'),
+      currentResponseView: document.getElementById('currentResponseView'),
+      outgoingAppendView: document.getElementById('outgoingAppendView'),
       jsonView: document.getElementById('jsonView'),
     };
 
@@ -619,12 +648,18 @@ INDEX_HTML = r"""<!doctype html>
       });
 
       els.summaryPanel.hidden = state.tab !== 'summary';
-      els.jsonPanel.hidden = state.tab === 'summary';
+      els.appendPanel.hidden = state.tab !== 'append';
+      els.jsonPanel.hidden = state.tab === 'summary' || state.tab === 'append';
 
       if (state.tab === 'request') {
         els.jsonView.textContent = formatJson(call.request_kwargs);
       } else if (state.tab === 'response') {
         els.jsonView.textContent = formatJson(call.response);
+      } else if (state.tab === 'append') {
+        const append = call._append_view || { canonical: false, note: 'No append view is available for this call.' };
+        els.incomingAppendView.textContent = truncate(append.incoming_append ?? append.note);
+        els.currentResponseView.textContent = truncate(append.this_response ?? call.response);
+        els.outgoingAppendView.textContent = truncate(append.outgoing_append ?? append.outgoing_note ?? null);
       } else if (state.tab === 'events') {
         els.jsonView.textContent = formatJson(call.stream_events || []);
       } else if (state.tab === 'full') {
@@ -948,6 +983,90 @@ def summarize_input(input_value: Any) -> str:
     return type(input_value).__name__
 
 
+def compact_request_parameters(request: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in request.items() if key not in {"instructions", "input", "tools"}}
+
+
+def is_prefix(prefix: Any, full: Any) -> bool:
+    if not isinstance(prefix, list) or not isinstance(full, list):
+        return False
+    if len(prefix) > len(full):
+        return False
+    return prefix == full[: len(prefix)]
+
+
+def build_append_view(calls: list[dict[str, Any]], call: dict[str, Any]) -> dict[str, Any]:
+    """Build a turn-local view around Hermes' append-only transcript replay."""
+    if call.get("api") != "responses.stream":
+        return {
+            "canonical": False,
+            "note": "Append View is defined for canonical responses.stream calls. responses.create records are SDK wrapper duplicates.",
+        }
+
+    streams = sorted(
+        [item for item in calls if item.get("api") == "responses.stream"],
+        key=lambda item: int(item.get("call_index") or 0),
+    )
+    positions = {item.get("call_index"): index for index, item in enumerate(streams)}
+    index = positions.get(call.get("call_index"))
+    if index is None:
+        return {"canonical": False, "note": "Canonical stream call was not found in this run."}
+
+    request = call.get("request_kwargs") or {}
+    current_input = request.get("input") or []
+    previous_call = streams[index - 1] if index > 0 else None
+    next_call = streams[index + 1] if index + 1 < len(streams) else None
+
+    if previous_call is None:
+        incoming_append: Any = {
+            "kind": "initial_system_prompt",
+            "note": "First canonical call: there is no previous append. This panel shows the static prompt envelope.",
+            "request_parameters": compact_request_parameters(request),
+            "instructions": request.get("instructions"),
+            "tools": request.get("tools"),
+            "initial_input": current_input,
+        }
+        incoming_prefix_ok = True
+    else:
+        previous_input = (previous_call.get("request_kwargs") or {}).get("input") or []
+        incoming_prefix_ok = is_prefix(previous_input, current_input)
+        incoming_append = current_input[len(previous_input) :] if incoming_prefix_ok else {
+            "error": "Current input is not prefixed by the previous canonical input.",
+            "previous_input_items": len(previous_input),
+            "current_input_items": len(current_input),
+        }
+
+    if next_call is None:
+        outgoing_append = None
+        outgoing_prefix_ok = None
+        outgoing_note = "No next canonical request exists, so the post-response append cannot be observed from a later request."
+    else:
+        next_input = (next_call.get("request_kwargs") or {}).get("input") or []
+        outgoing_prefix_ok = is_prefix(current_input, next_input)
+        outgoing_append = next_input[len(current_input) :] if outgoing_prefix_ok else {
+            "error": "Next input is not prefixed by this canonical input.",
+            "current_input_items": len(current_input),
+            "next_input_items": len(next_input),
+        }
+        outgoing_note = None
+
+    return {
+        "canonical": True,
+        "call_index": call.get("call_index"),
+        "previous_call_index": previous_call.get("call_index") if previous_call else None,
+        "next_call_index": next_call.get("call_index") if next_call else None,
+        "incoming_prefix_ok": incoming_prefix_ok,
+        "outgoing_prefix_ok": outgoing_prefix_ok,
+        "current_input_items": len(current_input) if isinstance(current_input, list) else None,
+        "incoming_append_items": len(incoming_append) if isinstance(incoming_append, list) else None,
+        "outgoing_append_items": len(outgoing_append) if isinstance(outgoing_append, list) else None,
+        "incoming_append": incoming_append,
+        "this_response": call.get("response"),
+        "outgoing_append": outgoing_append,
+        "outgoing_note": outgoing_note,
+    }
+
+
 class TraceHandler(BaseHTTPRequestHandler):
     server_version = "HermesTraceViewer/1.0"
 
@@ -990,8 +1109,10 @@ class TraceHandler(BaseHTTPRequestHandler):
 
         if len(parts) == 5 and parts[3] == "calls":
             call_index = int(parts[4])
-            for call in load_jsonl(run_path / JSONL_NAME):
+            calls = load_jsonl(run_path / JSONL_NAME)
+            for call in calls:
                 if call.get("call_index") == call_index:
+                    call["_append_view"] = build_append_view(calls, call)
                     self.send_json(call)
                     return
             self.send_error(HTTPStatus.NOT_FOUND, "call not found")
